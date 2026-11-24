@@ -30,6 +30,15 @@ void ShowErrorApplet(std::string_view title, std::string_view body) {
   std::string b(title);
   b += "\n\n";
   b += body;
+#if defined(__SWITCH2__)
+  // kaiHEN: the system error applet ends in "The software was closed because
+  // an error occurred", which unloads kaiHEN (LostOdysseyRecomp, ShowError).
+  // The message stays in the log; the caller's exit returns to hbmenu.
+  (void)t;
+  (void)b;
+  BD_WARN("error applet skipped on Switch 2 (kaiHEN); the message is only in the log");
+  return;
+#endif
   ErrorApplicationConfig config;
   if (R_FAILED(errorApplicationCreate(&config, t.c_str(), b.c_str())))
     return;

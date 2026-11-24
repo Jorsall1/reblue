@@ -1,0 +1,56 @@
+SESSION 007 (2026-11-23): black screen at boot = swapchain format; stale pack index
+CAUSE (logs Desktop\bluedragon\logs, reblue_001.log + rex\rex_stderr.log)
+  "No compatible surface formats were found." then vkCreateSwapchainKHR 0xFFFFFFFD -> "Plume createSwapChain
+  failed" -> init failure, exit 1 to hbmenu. OunceVK's VK_NN_vi_surface offers no B8G8R8A8_UNORM; reblue asked
+  for it. LO uses R8G8B8A8_UNORM (kSwapChainFormat, LO gpu/video.cpp:915).
+  Second finding: "[vfs] pack index not replaced: File exists" -> the 1673-archive pack index was rebuilt on
+  every boot (13 s on the main thread, 18:24:55.9 -> 18:25:09.1) because libnx fsdev rename does not overwrite.
+CHANGED
+  src/gpu/device.h: kSwapChainFormat (R8G8B8A8_UNORM under __SWITCH2__, B8G8R8A8_UNORM elsewhere).
+  src/gpu/device.cpp: swap chain desc uses it.
+  src/gpu/device_pipelines.cpp: copy-color / gamma-correction / fsr-easu pipelines (they draw into the swap chain
+    image) use it.
+  src/gpu/imgui_overlay_drawer.cpp: ImGui pipeline (draws into the swap chain framebuffer) uses it.
+  Offscreen guest back buffer and PSO templates stay B8G8R8A8.
+  src/vfs/mounts.cpp SaveIndex: when rename fails, remove the old index and rename again (all platforms; only
+    runs on failure).
+VERIFIED
+  build-switch2.sh 61/61, Done. Desktop\reblue.nro 47,608,727 bytes, sha256 DAEC4C20...760D7958.
+  Not yet run on hardware.
+SAFETY AUDIT (brick / corruption risk, Switch 2 build)
+  Searched src, rexglue-sdk src/include, plume for NAND/BIS/system save, set:sys, spl, fuse, i2c/gpio/fan/tc,
+  bpc/spsm power, ns/ncm/es installs, svcMap*/debug/SMC syscalls. None present. Findings:
+  - Files: writes only under sdmc:/switch/... (install root, logs, cache, profiles). The atmosphere/contents
+    NPDM writer returns early under __SWITCH2__. Recursive deletes are scoped to install-root subpaths
+    (language packs, DLC dirs, update staging; updates are disabled on Switch).
+  - Clocks: StartMaxClocks (bd_switch2_max_clocks, off by default) only picks rates from pcv's own table.
+    FIXED: switch_tuning.cpp ApplySwitchClocks passed bd_switch_gpu_mhz to switch_apm.cpp on Switch 2, which
+    would set Switch 1 apm PerformanceConfiguration ids (0x92220008 etc.) on Switch 2 hardware. Now mhz = 0
+    under __SWITCH2__ (apm untouched). Default was 0, so no prior run used it.
+  - sys-clk / SaltyNX: return before any sm call under __SWITCH2__. Switch 1 svcMap* guest memory not compiled
+    (guest_memory_switch.cpp is #if !__SWITCH2__). Every diagAbort/ISelfController::Exit path is replaced by
+    RexSwitch2Exit under __SWITCH2__.
+  Rebuild 12/12; reblue.nro sha256 d192c2b0...81a168b8 in out/switch2, Desktop and sw2 sd\switch\reblue (equal).
+BOOT LOADING BAR (Switch 2 only)
+  src/core/boot_progress.h (new, header-only): phases [lo, hi] + expected seconds; Report(done, total); the
+    shown value is max(reported, time guess creeping to 90% of the phase), never decreasing. No-ops outside
+    __SWITCH2__.
+  src/gpu/device.h + present.cpp: Video::PresentBootProgress(fraction): black frame, bar 70% wide, 7% above
+    the bottom, 8 px at 1080p; clears only (2-3 rects), no pipeline, no overlay hook, so it never marshals to
+    the busy UI thread. Returns once s.ready (guest tail done).
+  src/reblue_app.cpp: OnFinalizePaths (Switch path) runs the pre-Runtime half of CreateHostDevice and starts
+    a bar thread (33 ms frames, sleeps so the kaiHEN exit can end it). Phases: game mount 0.02-0.27 (5 s),
+    OnPreLaunchModule pack index 0.27-0.97 (13 s). StopBootBar before the guest-tail CreateHostDevice
+    presents a full bar, which stays until the game's first frame.
+  src/vfs/mounts.cpp BuildIndex: Report(archive, count) per archive.
+  Build 61/61, no warnings in these files. reblue.nro 47,608,727 bytes, sha256 efdbd661...a0e1555f in
+  out/switch2, Desktop and sw2 sd\switch\reblue (equal).
+  Note: renderer now starts ~5 s earlier (before the game mount). If it fails there, the bar is skipped and
+  the old OnPreLaunchModule path reports the error as before.
+OPEN
+  - Hardware: loading bar visible and moving; picture at boot; first boot still rebuilds the pack index (13 s), second boot should log
+    "cached index". If it still says "read from archives", the stamp changes between boots (ScanArchives).
+  - HOME showing black for ~1 s: no log of it in this run. Likely the app had no presented frame (swapchain
+    failed) and the main thread was blocked 18 s in init without pumping applet messages. Recheck once frames
+    present; if it stays, log timing of AppletMessage_FocusStateChanged in windowed_app_context_switch.cpp.
+  - rex_cuelgue.log "no frames 6 s" was the loading phase, not a hang.

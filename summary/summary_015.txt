@@ -1,0 +1,39 @@
+SESSION 015 (2026-11-24): smoother dynres (react before frames drop, no GPU drain), working FPS cap 30-120
+LOGS (Desktop\bluedragon\new log\logs, reblue_012 14:00 + 013 14:07, build 20261124_1354 = session 014)
+  No crash (rex_session "ended, code 0"; rex_crash.log is the old 011 terminate).
+  Dynres stepped down only at 17-20 ms GPU against a 15.8 budget: 10-frame EMA + 1.5 s over + 4 s gap
+    => ~90 missed vblanks per scene change (14:07:39, 14:08:18 1080->864 at 19.9 ms; 56 fps windows).
+  Every height change: SyncBackBufferSizeLocked waited both in-flight fences (~20 ms between "engine
+    surfaces rebuilt" and "back buffer ->") = queue emptied, a missed frame on each step.
+  FPS slider: swapchain "FIFO (immediate no, mailbox yes)"; plume vsync-off wants IMMEDIATE, falls back
+    to FIFO => 90/120/Unlimited all ran at 60. Dynres budget fixed at 15.8 whatever the cap.
+  pass_timer counted only "depth only 2048x2048" as size-independent; Low preset shadow map is 1024.
+  [hitch] 120-344 ms at area loads (textures created, 0 SD reads: guest CPU), 190 ms on Settings open
+    (D2Anime L_modmgr, no [menu-csv] line => guest build), 1.2-1.5 s GPU wait right before "exit
+    requested" (HOME): not addressed. Clocks system default (CPU 1100 / GPU 561 / EMC 2133), by design.
+CHANGED (Switch 2 only unless noted)
+  src/gpu/device.cpp, device.h, frame_ring.cpp: back buffer resize parks old image/view/framebuffers in
+    the recording slot's graveyards (new framebuffer_graveyard[kNumFrames], cleared in DrainSlot), no
+    fence wait. Switch 1 keeps the drain.
+  src/gpu/present.cpp: ApplyVsync on Switch 2 sets requiredPresentMode MAILBOX when bd_fps_limit > 60
+    (or vsync off), FIFO otherwise; logs "[frames] present mode -> X (fps cap N, vsync on/off)".
+  src/core/settings_rows.cpp: Switch 2 FPS options 30,40,45,50,60,70,80,90,100,110,120 (no Unlimited).
+  src/engine/settings.cpp: Switch 2 bd_fps_limit clamped 30-120 (0 -> 120). Default stays 60.
+  src/platform/switch/switch_tuning.cpp: budget = bd_switch_dynamic_gpu_ms * 60 / fps cap ("[dynres]
+    target N fps: GPU budget X ms"); step down 1 s after any change when the 10-frame EMA is over for
+    0.5 s or a fast EMA (0.35) is 10% over for 0.25 s; multi-step prediction from max(ema, fast) + FSR
+    cost when leaving the output height; after a change the averages restart at the predicted load.
+    Steps up unchanged (4 s gap, 4 s under 93%, back-off).
+  src/gpu/pass_timer.cpp (all platforms; only Switch 2 uses fixed_ms): any square depth-only target
+    >= 512 counts as size-independent (shadow map).
+VERIFIED
+  build-switch2.sh EXIT=0, 0 warnings (out/build_015.log). reblue.nro 47,653,783 bytes, sha256
+  209413d95a3a86606bec2759182a83caad837ac9800c90f5efd390cb0078676f in out/switch2 and Desktop (equal).
+  249 ouncevk_vk* T, 0 unprefixed vk* T/U. Not run on hardware. Switch 1 not rebuilt.
+OPEN
+  - Hardware: Settings > FPS 90/120: "[frames] present mode -> MAILBOX", fps above 60 in [frames]/HUD
+    (whether the panel shows >60 Hz is the system's; MAILBOX on OunceVK untested until now). Back to 60:
+    FIFO again. Dynres: steps down within ~0.3-0.5 s of a heavy scene, no "back buffer" stall, no
+    [retire-race] warnings, no corruption after steps.
+  - If MAILBOX misbehaves: revert ApplyVsync's Switch 2 block (FIFO only).
+  - Fixed max-size targets (viewport-only dynres) still the full fix for the rebuild cost.

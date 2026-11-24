@@ -53,6 +53,51 @@
 #endif
 #include "vfs/vfs.h"
 
+#if defined(__SWITCH2__)
+#include <atomic>
+#include <thread>
+
+#include "core/boot_progress.h"
+
+namespace {
+
+// Boot loading bar (Switch 2). The boot runs on the main thread for ~18 s
+// (game device mount, pack index, renderer) with nothing on screen; this
+// thread presents a bar meanwhile. It only clears (Video::PresentBootProgress)
+// and never marshals to the UI thread, which is busy. It sleeps between
+// frames, so a kaiHEN exit ends it there (switch2_exit.cpp).
+std::thread g_boot_bar_thread;
+std::atomic<bool> g_boot_bar_stop{false};
+
+void StartBootBar(rex::ui::Window *window) {
+  if (g_boot_bar_thread.joinable())
+    return;
+  // Pre-Runtime half of the renderer; OnPreLaunchModule's call completes it.
+  if (!bd::gpu::Video::CreateHostDevice(window)) {
+    BD_WARN("Boot loading bar off: renderer not up yet");
+    return;
+  }
+  g_boot_bar_stop.store(false, std::memory_order_release);
+  g_boot_bar_thread = std::thread([] {
+    while (!g_boot_bar_stop.load(std::memory_order_acquire)) {
+      bd::gpu::Video::PresentBootProgress(bd::boot_progress::Current());
+      std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+  });
+}
+
+// Leaves the last frame (full bar) on screen until the game's first present.
+void StopBootBar() {
+  if (!g_boot_bar_thread.joinable())
+    return;
+  g_boot_bar_stop.store(true, std::memory_order_release);
+  g_boot_bar_thread.join();
+  bd::gpu::Video::PresentBootProgress(1.0f);
+}
+
+} // namespace
+#endif
+
 #ifdef REBLUE_BUILD_INSTALLER
 REXCVAR_DEFINE_BOOL(
     no_installer, false, "reblue",
@@ -659,6 +704,11 @@ ReblueApp::OnFinalizePaths(const rex::PathConfig &defaults,
     cfg.connector = bd::installer::InstallConnector::kPortableFile;
     if (std::filesystem::exists(cfg.game_data_path() / "default.xex")) {
       BD_INFO("Switch: game data at {}", cfg.game_data_path().string());
+#if defined(__SWITCH2__)
+      // Next: the runtime mounts the game folder (~5 s on Switch 2).
+      bd::boot_progress::Phase(0.02f, 0.27f, 5.0f);
+      StartBootBar(window());
+#endif
       return PathsForInstall(defaults, cfg);
     }
     bd::platform::ShowFatalError(
@@ -875,6 +925,10 @@ void ReblueApp::FinishInstaller(rex::PathConfig defaults,
 #endif // REBLUE_BUILD_INSTALLER
 
 void ReblueApp::OnPreLaunchModule() {
+#if defined(__SWITCH2__)
+  // Next: the pack index (13 s when it is rebuilt, reported per archive).
+  bd::boot_progress::Phase(0.27f, 0.97f, 13.0f);
+#endif
   bd::platform::InstallCrashHandler();
   bd::EnableHighResTimer();
 
@@ -932,6 +986,10 @@ void ReblueApp::OnPreLaunchModule() {
   // that the guest does not route through its single "download" IPK slot.
   bd::vfs::VFS::Get().DLC().MountArchives();
 
+#if defined(__SWITCH2__)
+  // Before the guest tail: from s.ready on, Present owns the swap chain.
+  StopBootBar();
+#endif
   if (!bd::gpu::Video::CreateHostDevice(window())) {
     BD_ERROR("Native renderer init failed, reblue cannot continue");
     app_context().QuitFromUIThread();
@@ -960,7 +1018,14 @@ void ReblueApp::InstallOverlayDrawHook() {
       return;
     // Draw would return having done nothing, and the round trip parks this
     // thread for as long as the UI thread takes to wake.
-    if (!imgui_drawer()->HasDialogs() && !PendingOverlayWork())
+#if defined(__SWITCH2__)
+    // The HUD line keeps the overlay pass running while it is on; while off
+    // nothing changes (no marshal when there are no dialogs).
+    const bool hud = bd::platform::Switch2ShowFps();
+#else
+    constexpr bool hud = false;
+#endif
+    if (!hud && !imgui_drawer()->HasDialogs() && !PendingOverlayWork())
       return;
     // Split so a capture prices the marshal (this zone minus the inner one)
     // apart from the ImGui work itself.
@@ -969,6 +1034,13 @@ void ReblueApp::InstallOverlayDrawHook() {
       BD_CPU_ZONE("OverlayDraw");
       MaybeShowUpdatePrompt();
       UpdateCheckStatus();
+#if defined(__SWITCH2__)
+      const bool show_hud = bd::platform::Switch2ShowFps();
+      if (show_hud && !perf_hud_)
+        perf_hud_ = std::make_unique<bd::ui::PerfHudOverlay>(imgui_drawer());
+      else if (!show_hud && perf_hud_)
+        perf_hud_.reset();
+#endif
       bd::gpu::ReblueUIDrawContext ctx(w, h, cmd, fb);
       imgui_drawer()->Draw(ctx);
     });

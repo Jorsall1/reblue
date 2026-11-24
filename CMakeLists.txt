@@ -15,7 +15,13 @@ set(REBLUE_SWITCH OFF)
 option(REBLUE_SWITCH_DEKO3D "Switch: build plume's deko3d back end beside NVK (docs/SWITCH-deko3d.md)" OFF)
 if(REXGLUE_PLATFORM_SWITCH)
     set(REBLUE_SWITCH ON)
-    include(cmake/switch.cmake)
+    if(REXGLUE_PLATFORM_SWITCH2)
+        # Switch 2 (kaiHEN, libounce, OunceVK): cmake/toolchains/switch2-libounce.cmake.
+        # switch2.cmake includes switch.cmake. See AGENTS.md.
+        include(cmake/switch2.cmake)
+    else()
+        include(cmake/switch.cmake)
+    endif()
 endif()
 
 cmake_dependent_option(REBLUE_D3D12

@@ -18,6 +18,7 @@
 #include <rex/logging.h>
 #include <rex/ui/windowed_app.h>
 #include <rex/ui/windowed_app_context_switch.h>
+#include <rex/ui/switch2_exit.h>
 
 // Only the syscall header: switch.h drags typedefs that collide with rex.
 extern "C" {
@@ -52,14 +53,25 @@ namespace {
 [[noreturn]] void ExitProcess(int result) {
   REXLOG_INFO("Switch: exiting process ({})", result);
   rex::FlushLogging();
+#if defined(__SWITCH2__)
+  // kaiHEN: back to hbmenu through the loader, never ISelfController::Exit
+  // (it would end the donor game). See switch2_exit.cpp.
+  RexSwitch2Exit(result);
+#else
   std::fflush(nullptr);
   __nx_applet_exit_mode = 1;
   __libnx_exit(result);
+#endif
 }
 
 }  // namespace
 
 int main(int argc, char* argv[]) {
+#if defined(__SWITCH2__)
+  // First: the main thread is the one the kaiHEN loader must get back, and the
+  // exit lock has to be held before anything can fail.
+  RexSwitch2ExitInit();
+#endif
   auto remaining = rex::cvar::Init(argc, argv);
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();

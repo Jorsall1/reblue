@@ -1,0 +1,57 @@
+SESSION 013 (2026-11-24): FPS/res HUD, FSR toggle, Low default, hitch cascade, language-size stall, audio
+LOGS (Desktop\bluedragon\new log\logs; 009 13:02-13:15 and 010 13:15 = session 012 build, built 20261124_1255)
+  FSR: present pass 0.9-1.0 ms at 1080 native, steady 1.7 ms at every lower height (bd_switch_fsr 2) =>
+    EASU ran whenever render < output. Never logged before; now "[fsr] present WxH -> WxH: ..." on change.
+  30 fps cascade: one long frame lifted frame_clock's 2 s average (sample up to 0.5 s, weight up to 0.25)
+    to ~215 ms -> "interpolation off, 30 fps cap" for ~12 s (13:02:48-13:03:00, 13:03:32-13:03:43):
+    the sustained dip after Settings actions.
+  819/800 ms frames in Settings (13:02:48/50, 0 reads/textures/pipelines): LanguageSize ->
+    LanguageBytesOnDisk stats ~1250 files per language on the SD on the game thread; cache cleared each open.
+  Menu open: 126-176 ms frame on every open (4 textures 0.5 ms, CPU). Cause not found; instrumented.
+  774 ms / 92 ms-GPU frames 13:03:32 and 54 ms GPU 13:10:43-13:11:21: user tests (3840x2160 SS+MSAA,
+    8192 shadow maps in gpu-passes). Not a bug. PSO: 1 render-thread miss in 12 min (fine).
+  Dynres: 576<->648<->720 flapping 13:07-13:09 (each rebuild a 50-100 ms frame); 1080->936->792->648 in 12 s.
+  Audio (rex_prev_perfil = 009): 0 "solicitudes sin datos" in gameplay (12 at boot), 1880 frames mixed/10 s:
+    the game side never ran dry. Output thread 0x2B pinned to core 0 (threadCreate -2), equal priority to
+    XMA Decoder / Audio Worker (0x2B, mask 0x3F); device queue 3 x 21.3 ms. Device underruns were not counted.
+  SD copy's reblue.toml (sw2 sd\...\profiles\default) pins bd_shadow_distance 2.0 / dimension 2048 (2x).
+  Code defaults on Switch 2 were already Low / 1x (__SWITCH__ kPresets Low = 1024, 1.0).
+CHANGED (all Switch 2 only: __SWITCH2__)
+  src/gpu/present.cpp, src/gpu/device.h: NoteSwitch2Present (fps over 0.5 s, live src size, fsr flag,
+    "[fsr]" line on change); Video::Switch2HudStats.
+  src/ui/perf_hud.h/.cpp (new, GLOB): PerfHudOverlay, top-left "60 FPS | 1152x648 FSR", snprintf into
+    a stack buffer, 2 AddText. src/reblue_app.h/.cpp: overlay hook runs while bd_switch2_show_fps; HUD
+    made/dropped on the UI thread.
+  src/platform/switch_tuning.h/.cpp: cvar bd_switch2_show_fps (false); Switch2ShowFps/Set, SwitchFsrEnabled/
+    SetSwitchFsrEnabled (on = bd_switch_fsr 2, off = 0, live). Dynres: step-up undone within 20 s doubles
+    the up-after-down wait 10 -> 80 s max, reset after 60 s stable ("[dynres] step up undone ..."); multi-
+    step down targets 93% (kFitShare) not 95%.
+  src/core/settings_rows.cpp + res/embed/localization.toml: Display > Render Resolution: "FSR Upscaling"
+    On/Off and "Show FPS" On/Off (saved by the menu's SaveConfig).
+  src/core/settings_migration.cpp: config_version 3 (Switch 2): once, Low preset (shadows 1x: 1.0/1024,
+    no SS/MSAA, aniso 2, post/reflection Low) for a loaded config. Menu changes afterwards persist
+    (config_version 3 saved with them). A hand-edited toml still at config_version 2 gets reset once more.
+  src/engine/frame_clock.cpp: each frame counts as <= 50 ms with <= 25 ms weight in the slow-frame average
+    (sustained < 36 fps still detected in ~3 s).
+  src/engine/menus/config_menu_data.cpp/.h, config_menu.cpp: language sizes on a detached 0x3B worker
+    (once per process, again after a language job), "..." until known, panel refreshes on
+    LanguageSizesGeneration.
+  src/engine/d2anime/anime_mount.cpp: "[menu-csv] <key> built in X ms" when a generated CSV takes >= 5 ms.
+  thirdparty/rexglue-sdk/src/audio/switch/switch_audio_system.cpp: 4 device buffers (85 ms); output thread
+    raised to 0x28 from inside (falls back to 0x2B, logged), core mask = process mask (0x3F); underrun
+    estimate (counters 33/34). switch_perf.cpp: kCounterCount 35, line "audio salida: N huecos del
+    dispositivo, X ms de silencio".
+VERIFIED
+  build-switch2.sh EXIT=0, 0 warnings (out/build_013.log). reblue.nro 47,641,495 bytes, sha256
+  36072aefcb366ed1b85f5fc0ea5fe4fa56c0d4760cf766a5a319dc952a6c0cc2 in out/switch2 and Desktop (equal).
+  ELF: 249 ouncevk_vk* T, 0 unprefixed vk* T/U; SetCurrentProcess only as guest KeSetCurrentProcessType
+  (xboxkrnl export, not an sm/fsp call); appletLockExit/UnlockExit present; diagAbortWithResult = our strong
+  override, direct calls in Switch 1 #else branches; "sdmc:/hbmenu.nro" present; cores 0x3F unchanged.
+  Not run on hardware. Switch 1 not rebuilt (all changes behind __SWITCH2__; frame_clock's Switch 1 path
+  is the old expression).
+OPEN
+  - Hardware: Show FPS on, toggle FSR (expect "[fsr] ... bilinear (FSR off ...)" / "FSR 1 (EASU)"), language
+    page (no 800 ms frames, "..." then size), "[config] migrated to v3", "audio salida" huecos in
+    rex_perfil.log, "SwitchAudioSystem: output thread priority 0x28".
+  - Menu-open 126-176 ms frame: read "[menu-csv]" lines; if none, it is the guest's D2Anime build itself.
+  - Dynres rebuild hitch per step; fixed max-size targets still the real fix.

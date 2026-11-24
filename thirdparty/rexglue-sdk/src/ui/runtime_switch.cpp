@@ -26,6 +26,9 @@
 
 extern "C" void RexSwitchCrashLog(const char* reason, const ThreadExceptionDump* ctx, u64 stack,
                                   u64 pc);
+#if defined(__SWITCH2__)
+extern "C" [[noreturn]] void RexSwitch2Exit(int code);  // rex/ui/switch2_exit.h
+#endif
 
 namespace {
 
@@ -53,7 +56,12 @@ namespace {
   }
   RexSwitchCrashLog(reason, nullptr, reinterpret_cast<u64>(__builtin_frame_address(0)),
                     reinterpret_cast<u64>(__builtin_return_address(0)));
+#if defined(__SWITCH2__)
+  // kaiHEN: the error screen unloads kaiHEN. Back to hbmenu instead (switch2_exit.cpp).
+  RexSwitch2Exit(1);
+#else
   diagAbortWithResult(MAKERESULT(Module_Libnx, 104));
+#endif
 }
 
 __attribute__((constructor(101))) void RexSwitchInstallTerminate() {

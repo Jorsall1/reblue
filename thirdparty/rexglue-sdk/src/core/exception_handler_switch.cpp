@@ -429,6 +429,10 @@ void WriteCrashFile(const char* data, size_t len) {
 
 }  // namespace
 
+#if defined(__SWITCH2__)
+extern "C" [[noreturn]] void RexSwitch2Exit(int code);  // rex/ui/switch2_exit.h
+#endif
+
 extern "C" void RexSwitchCrashLog(const char* reason, const ThreadExceptionDump* ctx,
                                   uint64_t stack, uint64_t pc) {
   // A second fault while the first is being written (on this thread or another)
@@ -754,7 +758,12 @@ void WriteBack(const Exception& ex, const HostThreadContext& tc, ThreadException
   (void)esr;
   RexSwitchCrashLog(data_abort ? "fallo de acceso a memoria" : "excepcion de CPU", ctx,
                     ctx->sp.x, pc);
+#if defined(__SWITCH2__)
+  // kaiHEN: the error screen unloads kaiHEN. Back to hbmenu instead (switch2_exit.cpp).
+  RexSwitch2Exit(1);
+#else
   diagAbortWithResult(MAKERESULT(Module_Libnx, 102));
+#endif
 }
 
 }  // namespace

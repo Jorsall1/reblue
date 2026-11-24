@@ -183,6 +183,9 @@ void DrainSlot(VideoState &s, u32 slot) {
       s.texture_free_backlog.push_back(std::move(tex));
     s.texture_graveyard[slot].clear();
     s.buffer_graveyard[slot].clear();
+#if defined(__SWITCH2__)
+    s.framebuffer_graveyard[slot].clear();
+#endif
     DrainDescriptorSlotsLocked(s, slot);
     s.reclaiming_slot.store(-1, std::memory_order_relaxed);
   }

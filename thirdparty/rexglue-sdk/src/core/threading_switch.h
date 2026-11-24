@@ -189,6 +189,9 @@ unsigned RexSwitchProcessCoreMask(void);
 int RexSwitchSystemCore(void);
 int RexSwitchSystemCoreMode(void);
 unsigned RexSwitchAppCoreMask(void);
+/* Lets the calling thread run on every application core (RexSwitchAppCoreMask), with the hint-th of them as its
+ * ideal core. Switch 2: spreads guest threads over cores 0-5 (kaiHEN's 0x3F). Returns whether the kernel accepted. */
+bool RexSwitchSpreadCurrentThread(int hint);
 /* Pins the calling thread to the system core alone and, if priority >= 0, sets its priority. False without one. */
 bool RexSwitchMoveCurrentThreadToSystemCore(int priority);
 /* Under the forwarder (switch_forwarder_program_id, or a Sphaira forwarder of this NRO), writes the four-core NPDM to

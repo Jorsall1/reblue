@@ -110,6 +110,20 @@ class FileHandle {
   std::filesystem::path path_;
 };
 
+#if defined(__SWITCH__)
+// SD card reads by file, for the long-frame report: every FileHandle::Read of
+// 64 KB or more is kept (the last 64). RecentSdReads sums those that ended at or
+// after since_ns (steady_clock, ns since its epoch) per file, largest first,
+// and returns at most max_files of them.
+struct SdReadByFile {
+  std::string name;  // the last two path components
+  uint64_t bytes = 0;
+  uint64_t ns = 0;   // time inside the reads
+  uint32_t reads = 0;
+};
+std::vector<SdReadByFile> RecentSdReads(uint64_t since_ns, size_t max_files);
+#endif
+
 struct FileInfo {
   enum class Type {
     kFile,

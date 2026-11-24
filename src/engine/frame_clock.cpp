@@ -104,8 +104,22 @@ void UpdateSlowFrames(double raw) {
     g_slowFrames = false;
     return;
   }
+#if defined(__SWITCH2__)
+  // A single long frame (a menu built, a surface rebuild, a level load) is a
+  // hitch, not load: unclamped, one 800 ms frame lifted the average to ~215 ms
+  // and held the 30 fps cap for ~12 s (log 009, 13:02:48 -> 13:03:00 and
+  // 13:03:32 -> 13:03:43, every one right after a Settings action). Each
+  // frame counts as at most 50 ms with at most 50 ms of weight: a sustained
+  // load under 36 fps (over 27.8 ms a frame) still crosses the threshold
+  // within the 2 s average.
+  constexpr double kMaxSample = 0.05;
+  const double sample = std::min(raw, kMaxSample);
+  const double a = std::clamp(sample / 2.0, 0.01, 0.5);
+#else
+  const double sample = std::min(raw, 0.5);
   const double a = std::clamp(raw / 2.0, 0.01, 0.5);
-  g_rawFrameAvg += (std::min(raw, 0.5) - g_rawFrameAvg) * a;
+#endif
+  g_rawFrameAvg += (sample - g_rawFrameAvg) * a;
   const bool was = g_slowFrames;
   if (!g_slowFrames && g_rawFrameAvg > 1.0 / double(minFps))
     g_slowFrames = true;

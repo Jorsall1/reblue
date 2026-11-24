@@ -535,6 +535,13 @@ X_STATUS XThread::Create() {
     // priority, and the first switch_system_core_mixer of the game's XAudio engine threads
     // (switch_guest_sound_entries) at switch_system_core_mixer_priority. Affinity calls from the game do not move
     // them back: with fewer than six cores SetActiveCpu sets no host affinity.
+#if REX_PLATFORM_SWITCH2
+    // Switch 2: every application core (0x3F under kaiHEN), each thread starting on the core of its Xbox 360
+    // hardware thread. Ideal core only, the mask stays whole (no exclusive pin; SetActiveCpu sets no host affinity
+    // with logical_processor_count 0).
+    RexSwitchSpreadCurrentThread(
+        GetFakeCpuNumber(static_cast<uint8_t>(creation_params_.creation_flags >> 24)));
+#endif
     if (!guest_thread_) {
       const std::string_view n(thread_name_);
       if (n.starts_with("Audio Worker") || (n.starts_with("XMA Decoder") && RexSwitchSystemCoreXma()))

@@ -1,0 +1,29 @@
+SESSION 009 (2026-11-23): why the crash left no report; crash reporting for silent deaths (Switch 2)
+WHY NO REPORT
+  Covered before: CPU faults (exception_handler_switch.cpp), abort()/std::terminate, exit() (switch_crash_hooks.c),
+  stderr unbuffered. All of them write rex_crash.log and an "[exit]" line in rex_stderr.log. The crash run had
+  neither, and the 1 s snapshots (rex_ultimo_a/b) just stopped, with no rex_cuelgue entry after boot: the process
+  was ended on the spot, not hung. Not covered: libounce's own diagAbortWithResult (weak, ends in svcBreak = instant
+  kill). The final ELF calls it from hidGetNpadStates* / hidInitializeNpad / padConfigureInput, appletGetMessage /
+  appletProcessMessage, threadExit, __syscall_getreent, randomGet, virtmemSetup, __appInit; mutexLock calls svcBreak
+  directly. Also not covered by anything in-process: masked SVCs or the system ending the process.
+  The game log (reblue_NNN.log) flushes info lines once a second (warnings at once), so up to 1 s of info is lost.
+CHANGED
+  thirdparty/rexglue-sdk/src/ui/switch_crash_hooks.c (__SWITCH2__ only):
+    - strong diagAbortWithResult: rex_crash.log ("diagAbortWithResult 0x.. desde libnx/libounce", module,
+      description, stack) then RexSwitch2Exit(1) (no svcBreak, no error screen). ELF: T diagAbortWithResult.
+    - session marker <log dir>/rex_session.txt: "running" at start (constructor 101), "ended, code N" at the exit.
+      A boot that finds "running" renames the previous rex_ultimo_a/b, rex_stderr, rex_perfil to rex_prev_*.log
+      (before this run truncates them) and writes rex_prev_session.log explaining it was a silent death.
+  thirdparty/rexglue-sdk/src/ui/switch2_exit.cpp: RunExit and RexSwitch2CloseForHomeMenu call RexSwitchSessionEnded.
+VERIFIED
+  build-switch2.sh EXIT=0 (13/13), no warnings in the changed files. reblue.nro 47,608,727 bytes, sha256
+  aea1caa9...9c14d30417 in out/switch2, Desktop, sw2 sd\switch\reblue. Not run on hardware.
+  Includes session 008 (timestamp fix, stale back buffer framebuffers, slower dynres steps; dynres on).
+OPEN
+  - Next crash: look for rex_crash.log (diagAbort now reported) or rex_prev_session.log (silent kill: then
+    rex_prev_ultimo_*.log has the last thread state).
+  - mutexLock's direct svcBreak is still uncovered (would need --wrap=svcBreak; the exception return path uses
+    svcBreak on purpose).
+  - Flicker-free dynamic resolution (fixed max-size targets, scene drawn into a sub-rectangle) not started; needs the
+    user's go-ahead, see the answer of this session.

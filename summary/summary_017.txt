@@ -1,0 +1,39 @@
+SESSION 017 (2026-11-24): log review of the session 016 UPDATE 2 build on hardware (no code changes)
+LOG: Desktop\bluedragon\new log\logs\reblue_016.log, built 20261124_1617 = out/switch2 sha d01fbc09...
+  (session 016b build). 16:31-16:38, ~6 min, handheld 1920x1080 output.
+STABILITY
+  rex_session "ended, code 0", stderr ends "[exit] HOME -> X". rex_crash.log (abort) and rex_cuelgue.log
+  carry no timestamp: stale from an earlier run (not symbolized; build unknown).
+  Known 1474 ms frame at HOME exit.
+FRAME RATE
+  Field: 59-60 fps, GPU-bound (GPU wait 7-14 ms, CPU 2-10 ms), dynres 576-936.
+  After the ev002-ev004 movie (16:37:2x on): CPU-bound again, 42-56 fps, CPU 15-20 ms, GPU wait < 2 ms.
+ANSWERS TO "READ NEXT LOG FOR"
+  1. Dynres step frame: rebuild hook total 0.4-2.2 ms, createTexture 1-3.7 ms, framebuffers ~0.1 ms, but the
+     frame has c 31-82 ms. So ~30-80 ms is spent elsewhere in that one frame (guest work after the size
+     change, or host per-new-target work not timed: views/SRV binding, first-use transitions, resolves).
+     Still unlocated -> stack sampling (perfil_pilas.flag) or time the frame by phase.
+  2. Texture churn: [textures] 150-220 created/s in the field, all "guest-texture fmt 75 flags 0x1" in
+     power-of-two-fraction chains of the render size (48x27, 96x54, 192x108, 384x216, 19x16, 5x2; at 1408x792:
+     44x24, 88x49, 176x99, 352x198). = guest bloom/downsample targets re-created each time (~15/s per size),
+     cost small (1-9 ms per 10 s) but it is churn. Post-movie: 128x72, 40x45, 32x18, 10x11, 64x36 fmt 75,
+     ~150/s, and step-cost frames show t 14 + fb 12 EVERY frame there, with CPU 17 ms. Area loads: bc-mirror
+     (256x256 fmt 58, 512/1024 fmt 55) 40-50/s, ~20-27 ms per 10 s.
+  3. Battle hitch: 1st battle 16:32:49 108 ms, bt01_00.ipk 15.97 MB in 4 reads (36.7 ms). 2nd 16:33:41 105 ms,
+     SD reads 2 (0.00 MB): the range cache serves the ipk now, but the frame is still ~105 ms -> the SD read
+     was not the main cost; the rest is guest CPU (parse/setup) in that frame.
+  Hot guest function: sub_8267F4D8 ~240 us a call, 270-435 calls/s, 6-11% of a core (stderr [hot-time]).
+OTHER HITCHES: 124/334 ms (16:32:30) and 106/338 ms (16:35:38) area loads (47-87 textures, 4-8 ms of it),
+  190 ms at 16:34:14 (4 textures, no SD) unexplained.
+OPEN (proposed order)
+  - Find who re-creates the fmt 75 guest textures (cache key misses? guest frees + reallocates its
+    downsample chain per frame or per scene): log address/pitch/caller of repeats; if host-side key churn,
+    reuse by (address, size, format). Post-movie it is every frame and the scene is CPU-bound.
+  - Profile the step frame and the battle-start frame with perfil_pilas.flag.
+  - Look at sub_8267F4D8 (what it is, why 240 us).
+
+SAVED BUILD
+  Commit tagged switch2-20261124_1617 on switch2-ouncevk (whole Switch 2 port, first commit of it; not pushed).
+  Submodules plume/XenosRecomp left dirty (host-stage applies their patches).
+  Binaries: out/saved/20261124_1617/ reblue.nro (sha d01fbc09...), reblue.elf (3f12e7db..., for sym.sh),
+  SHA256SUMS, reblue_016.log.

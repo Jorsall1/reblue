@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -29,6 +30,21 @@
 #include "gpu/shaders/shader_cache.h"
 
 namespace bd::gpu::pass_timer {
+
+namespace {
+// A square depth-only target ("depth only 1024x1024 D24S8"): the shadow map,
+// whose cost does not follow the render size (it was 2048 only before the
+// Switch 2 Low preset moved it to 1024).
+bool IsShadowMapLabel(const std::string &label) {
+  constexpr std::string_view kPrefix = "depth only ";
+  if (!label.starts_with(kPrefix))
+    return false;
+  unsigned w = 0, h = 0;
+  if (std::sscanf(label.c_str() + kPrefix.size(), "%ux%u", &w, &h) != 2)
+    return false;
+  return w == h && w >= 512;
+}
+} // namespace
 
 namespace {
 
@@ -774,21 +790,26 @@ void Collect(u32 slot_index) {
   const u64 end = ts[last];
   if (end <= start)
     return;
+  double fixed_ns = 0.0; // the part that does not follow the render size
   for (u32 i = 0; i < last; ++i) {
     const u64 a = ts[i];
     const u64 b = ts[i + 1];
     if (b < a)
       continue;
-    Totals &t = g_totals[slot.labels[i]];
+    const std::string &label = slot.labels[i];
+    Totals &t = g_totals[label];
     t.ns += double(b - a);
     ++t.passes;
+    if (label.starts_with("start of frame") || label.starts_with("present") ||
+        IsShadowMapLabel(label))
+      fixed_ns += double(b - a);
   }
   const double frame_ns = double(end - start);
   // Dynamic resolution (bd_switch_dynamic_resolution): the frame's GPU time;
   // a new handheld height is applied where the game rebuilds its render
   // targets (applying it here let the game draw a frame at the new size into
   // the old targets: the picture shrunk into the top-left corner).
-  if (bd::platform::SwitchDynamicResolutionFrame(frame_ns / 1e6))
+  if (bd::platform::SwitchDynamicResolutionFrame(frame_ns / 1e6, fixed_ns / 1e6))
     Output::RequestRecompute();
   g_frame_ns += frame_ns;
   g_worst_frame_ns = std::max(g_worst_frame_ns, frame_ns);

@@ -1,0 +1,82 @@
+re:Blue Switch 2 port - summary 001 (session 1: audit, the three kaiHEN/OunceVK fixes, Switch 2 CMake)
+=================================================================================================
+
+DELTA: reblueNX (Switch 1) -> Switch 2 (libounce 20261117 + OunceVK 20261123 + kaiHEN)
+  Toolchain    libnx + Docker (switch-dev image)   -> libounce in /opt/devkitpro, native WSL
+               -march=armv8-a / cortex-a57         -> -mcpu=cortex-a78c+crypto (libounce/switch2_cpu.mk), -D__SWITCH2__
+               libnx/switch.specs                  -> libounce/switch.specs; portlibs/switch2 before portlibs/switch
+  GPU          deko3d (default) + Mesa NVK option   -> plume Vulkan on OunceVK only (no deko3d, no uam shaders)
+               NVK through vk_icd* entry points    -> libouncevk.a with vk* renamed ouncevk_vk*, volk from
+                                                      ouncevk_vkGetInstanceProcAddr, -u for every entry point
+               vkCmdClearAttachments unbounded     -> <= 80 rects per call (ouncevk#2 PBDMA fix)
+  Memory       code-memory shadow + svcMapProcessMemory per view (A/C/E/7F/90 mirrors)
+                                                   -> Backend::Heap: one memalign 4 GiB block, zero svcMap*;
+                                                      no aliases; TranslatePhysical via per-page home table
+  Exit         __nx_applet_exit_mode=1 + __libnx_exit (ISelfController::Exit), diagAbortWithResult on crashes,
+               error applet for fatal dialogs      -> RexSwitch2Exit: exit lock held from start, next load
+                                                      sdmc:/hbmenu.nro on the main thread, threads ended/paused/
+                                                      resumed for kaiHEN's loader, _Exit; HOME->X = unlock and let
+                                                      the system end it; no error applet; crashes -> same exit
+  Services     SaltyNX, sys-clk sm lookups, forwarder NPDM writer -> stubbed on Switch 2
+
+LostOdysseyRecomp FILES REFERENCED (~/switch2-dev/LostOdysseyRecomp)
+  Exit / R hook: LostOdysseyRecomp/os/switch/switch_runtime.cpp (RawInitialize with fsOpenSdCardFileSystem,
+     no SetCurrentProcess; QuiesceAudio/QuiesceForExit; RunExit; ScanOtherThreads; ResumeThenReturnToLoader;
+     CloseForHomeMenu; EndProcessToHbmenu; ExitWatchdogMain appletMainLoop poll; EndThreadForExit;
+     __wrap_svcSleepThread / __wrap___libc_cond_wait), os/main_thread.cpp, os/switch_platform.h,
+     AGENTS.md item 4, summary/summary_016.txt, deadlock_and_hbmenu_fix.txt, retroarch_quit_fix.txt.
+     Commits: 5cde9314 (no SetCurrentProcess, R hook kept), c093a8db, 6e6c3b99, e9726ef3, 8de82b6c, 066bd3a2.
+     (LO has no debug/soft_reset.cpp exit logic relevant here: soft_reset is the in-game reset.)
+  Memory: LostOdysseyRecomp/kernel/guest_address_space_switch.cpp (Backend::Heap, AllocateHeapWindow),
+     kernel/memory.h (Translate = base + offset), heap_backend_fix.txt, virtmem_fix.txt, sdmc_mount_fix.txt.
+     Commits: 1eadf13b (zero svcMap*), 0027b5a8 (C/E commit on heap backend).
+  Clears: LostOdysseyRecomp/gpu/renderer.cpp (ReplayClears, kMaxClearRects = 80), summary_067/068.
+     Commits: 65d6b70a (80-rect split), 23e34ffd (merge before split).
+  OunceVK link: cmake/LoSwitch.cmake, cmake/PrefixOunceVK.cmake, cmake/toolchains/switch2-libounce.cmake.
+
+FILES CHANGED IN reblue (all Switch 2 code under __SWITCH2__ / REX_PLATFORM_SWITCH2 / REXGLUE_PLATFORM_SWITCH2)
+  New:  AGENTS.md, summary/summary_001.txt
+        cmake/toolchains/switch2-libounce.cmake, cmake/switch2.cmake, cmake/PrefixOunceVK.cmake (from LO)
+        tools/switch2/host-stage.sh (native WSL, root-free clang-19), tools/switch2/build-switch2.sh
+        tools/switch/patches/plume-switch2.patch (chunked clears + OunceVK volk init; applies after plume-switch.patch)
+        thirdparty/rexglue-sdk/src/core/guest_memory_switch2.cpp (Backend::Heap)
+        thirdparty/rexglue-sdk/src/ui/switch2_exit.cpp, include/rex/ui/switch2_exit.h (kaiHEN exit)
+  SDK:  include/rex/platform.h (REX_PLATFORM_SWITCH2), include/rex/system/xmemory.h + src/system/xmemory.cpp
+        (physical_membase_ = A view, no raw physical view, TranslatePhysical home table, SetPhysicalHome in
+        PhysicalHeap Alloc/AllocFixed/AllocRange), src/core/guest_memory_switch.cpp (Switch 1 only now),
+        src/core/CMakeLists.txt, CMakeLists.txt (REXGLUE_PLATFORM_SWITCH2), cmake/rexglue_switch.cmake
+        (no Mesa NVK on Switch 2, title provides rex::switch_gpu; switch2_exit.cpp in startup objects; icon),
+        src/ui/windowed_app_main_switch.cpp, windowed_app_context_switch.cpp, rex_app.cpp (exit paths, HOME->X),
+        src/ui/switch_perf.cpp (svcSleepThread wrap ends threads during the exit), switch_crash_hooks.c,
+        runtime_switch.cpp, src/core/exception_handler_switch.cpp, switch_libc_supplement.c (no diagAbort),
+        src/ui/switch_saltynx.cpp, switch_sysclk.cpp, src/core/threading_switch.cpp (stubbed)
+  re:Blue: CMakeLists.txt (switch2.cmake), src/core/threading.cpp (TerminateProcessNow), 
+        src/platform/switch/dialogs_switch.cpp (no error applet)
+
+STEP 0 (OunceVK 20261123)
+  Downloaded with gh to /tmp/ouncevk-20261123-1-any.pkg.tar.zst, Zstandard archive, sha256 OK
+  (1f3cd8f2...c39b). Installed set (20261120, by hand) backed up to portlibs/switch2/ouncevk-20261120-backup.
+  NOT INSTALLED: dkp-pacman needs root and sudo needs a password. User runs:
+    sudo dkp-pacman -U --noconfirm --overwrite '/opt/devkitpro/portlibs/switch2/*' /tmp/ouncevk-20261123-1-any.pkg.tar.zst
+
+VERIFIED
+  plume-switch.patch + plume-switch2.patch apply cleanly to a fresh plume checkout (pinned e0c8871).
+  tools/switch2/host-stage.sh: EXIT=0 (log /tmp/kiro/host-stage.log). clang 19.1.1 unpacked without root
+    into out/switch2-host/llvm-19; x11-xcb/wayland-client dev files into out/switch2-host/hostdeps (the SDK's
+    host configure requires them); rexglue built, codegen -> generated/sources.cmake, direct calls, localized
+    copies, XenosRecomp -> out/switch2-host/shader_cache.cpp (152 shaders, 2.16 MB).
+  CONFIGURE_ONLY=1 tools/switch2/build-switch2.sh: EXIT=0 (log /tmp/kiro/configure.log). GCC 16.1.0,
+    ReXGlue platform switch-arm64, Vulkan=ON, plume Vulkan only; PrefixOunceVK: 249 entry points prefixed
+    (against the installed OunceVK 20261120 libs, since 20261123 is not installed yet).
+  NOT VERIFIED: no Switch 2 object has been compiled yet. The shell tool stopped returning output mid-check.
+    Next session, first: bash /tmp/kiro/obj.sh (compiles only the changed files, writes /tmp/kiro/direct.log
+    with OK/FAIL per object), then the full build (bash tools/switch2/build-switch2.sh, ~8 jobs on 15 GB).
+    Note: ninja targets for single objects pull in the whole recompiled game (order-only deps).
+
+OPEN
+  - Nothing compiled for Switch 2 yet beyond configure; hardware untested.
+  - Exit: guest threads blocked in condition variables are paused and parked, not ended (LO also wraps
+    __libc_cond_wait; that symbol is not in libounce/libc here). >32 survivors -> loader ends the donor game.
+  - Backend::Heap loses write watches (no page protection); C/E/7F/90 views are not aliases.
+  - Switch 1 four-core mode / core masks (threading_switch.cpp) unreviewed for the Switch 2's cores.
+  - LO's merge of large clear rect lists before splitting (23e34ffd) not ported (perf only).

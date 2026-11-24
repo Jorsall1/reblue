@@ -1,0 +1,23 @@
+SESSION 006 (2026-11-23): single-player npad config, env.txt question, shadow size in the SD profile
+CHANGED
+  thirdparty/rexglue-sdk/src/input/switch/switch_input_driver.cpp: under REX_PLATFORM_SWITCH2,
+    padConfigureInput(1, NpadStandard) instead of kSlotCount (4). Same fix as LO summary_072 ("8 player input",
+    there in SDL): with several supported npads Horizon can give a controller player 2-4, which Blue Dragon does
+    not read. Slots 1-3 stay initialized and never connect. reblue has no controller applet call (no hidLa*).
+    Switch 1 keeps padConfigureInput(4).
+  SD profile sw2 sd\switch\reblue\profiles\default\reblue.toml: bd_shadow_dimension = 2048 (Switch default is the
+    Low preset's 1024, src/gpu/settings.h). Equivalent of LO's LO_SHADOW_RESOLUTION=2 (4x the shadow texels).
+NOT ADDED: env.txt
+  reblue reads no LO_* variables and has no env.txt loader; its switches are cvars in reblue.toml.
+  LO_GUEST_AFFINITY equivalent: xthread.cpp already starts each XThread on the core of its Xbox 360 hardware
+  thread (RexSwitchSpreadCurrentThread, session 002, always on). Later guest affinity calls
+  (KeSetAffinityThread -> XThread::SetActiveCpu) set no host affinity on Switch 2 (logical_processor_count < 6);
+  LO maps those to an ideal core. Not ported.
+VERIFIED
+  Incremental build 12/12, "Done". objdump of switch_input_driver.cpp.obj: w0=1, w1=0x1f before
+  bl padConfigureInput. reblue.nro 47,604,631 bytes, sha256 ad78a78e...2710caa0 in out/switch2, Desktop\reblue.nro
+  and sw2 sd\switch\reblue\reblue.nro (equal).
+OPEN
+  - Hardware: controller lands on player 1 handheld, docked with a Pro Controller, Joy-Con detach/attach.
+  - 2048 shadow map GPU cost on Switch 2 unmeasured (dynres absorbs it; set 1024 to undo).
+  - Optional: port LO's KeSetAffinityThread -> ideal core mapping into XThread::SetActiveCpu for Switch 2.

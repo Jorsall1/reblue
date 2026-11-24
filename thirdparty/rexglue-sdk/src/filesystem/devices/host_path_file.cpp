@@ -168,7 +168,20 @@ REXCVAR_DEFINE_INT32(nfsmw_io_cache_mb, 0, "Filesystem",
  * Memory: it comes from the host heap (1,024 MB), not from the GPU heap. With ~506 MB for the guest
  * and the thread stacks, 64 MB leaves margin; 128 would not in the pessimistic case.
  */
-REXCVAR_DEFINE_INT32(nfsmw_io_rangos_mb, 64, "Filesystem",
+/*
+ * Switch 2 (re:Blue, session 016): 128 MB total and 32 MB per entry. The repeated hitch of the
+ * hardware log (17 SD reads, 14.97 MB, ~55 ms of a 110 ms frame, four times in 10 minutes) is
+ * larger than the 12 MB entry ceiling, so it could never be kept. The heap there is all the
+ * memory hbloader hands over (about 9 GB, the guest's 4 GiB included), not the 1,024 MB above.
+ */
+#if defined(__SWITCH2__)
+#define REX_IO_RANGOS_MB 128
+#define REX_IO_RANGOS_MAX_MB 32
+#else
+#define REX_IO_RANGOS_MB 64
+#define REX_IO_RANGOS_MAX_MB 12
+#endif
+REXCVAR_DEFINE_INT32(nfsmw_io_rangos_mb, REX_IO_RANGOS_MB, "Filesystem",
                      "Cache de lecturas por rango exacto, tope total en MB (0 = apagada). 64 = la huella "
                      "medida de una carrera (56,6 MB) sin expulsiones; mas no compra nada.");
 
@@ -182,7 +195,7 @@ REXCVAR_DEFINE_INT32(nfsmw_io_rangos_min_mb, 0, "Filesystem",
                      "OBSOLETO (build 131): usar nfsmw_io_rangos_min_kb. Si es > 0 manda sobre el de KB.");
 
 // Per-entry ceiling: a single read cannot take more than this out of the total cap.
-REXCVAR_DEFINE_INT32(nfsmw_io_rangos_max_mb, 12, "Filesystem",
+REXCVAR_DEFINE_INT32(nfsmw_io_rangos_max_mb, REX_IO_RANGOS_MAX_MB, "Filesystem",
                      "Ninguna entrada de la cache de rangos pasa de estos MB.");
 
 namespace rex::filesystem {

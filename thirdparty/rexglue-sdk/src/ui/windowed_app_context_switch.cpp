@@ -12,6 +12,7 @@
 #include <cstdlib>
 
 #include <rex/logging.h>
+#include <rex/ui/switch2_exit.h>
 #include <rex/ui/window_switch.h>
 
 #include <switch.h>
@@ -58,10 +59,26 @@ struct SwitchWindowedAppContext::Impl {
   bool sobremesa_efectivo_visto = false;
 };
 
+#if defined(__SWITCH2__)
+namespace {
+// The one UI loop's wake event, for RexSwitch2Exit on another thread.
+UEvent* g_switch2_wakeup = nullptr;
+void WakeForSwitch2Exit() {
+  if (g_switch2_wakeup) {
+    ueventSignal(g_switch2_wakeup);
+  }
+}
+}  // namespace
+#endif
+
 SwitchWindowedAppContext::SwitchWindowedAppContext() : impl_(std::make_unique<Impl>()) {
   // Created here rather than in Initialize: other threads may post functions
   // as soon as the context exists.
   ueventCreate(&impl_->wakeup, true);
+#if defined(__SWITCH2__)
+  g_switch2_wakeup = &impl_->wakeup;
+  RexSwitch2SetMainLoopWake(&WakeForSwitch2Exit);
+#endif
 }
 
 SwitchWindowedAppContext::~SwitchWindowedAppContext() {
@@ -197,10 +214,26 @@ int SwitchWindowedAppContext::RunMainMessageLoop() {
       }
     }
 
+#if defined(__SWITCH2__)
+    RexSwitch2MainLoopHeartbeat();
+    // Another thread asked for the exit: it must run here, on the main thread
+    // (switch2_exit.cpp, rule 4).
+    if (RexSwitch2ExitRequested()) {
+      RexSwitch2Exit(0);
+    }
+    // HOME -> X: the system is closing the game and waits for the exit lock.
+    // Release it now rather than run the title teardown (TerminateTitle can
+    // block, and am ends a process that keeps it waiting as a fatal error,
+    // which drops kaiHEN's R hook).
+    if (!appletMainLoop()) {
+      RexSwitch2CloseForHomeMenu();
+    }
+#else
     // Processes every queued applet message and runs the hooks.
     if (!appletMainLoop()) {
       ProcessQuitRequest();
     }
+#endif
 
     ExecutePendingFunctionsFromUIThread();
     if (HasQuitFromUIThread()) {

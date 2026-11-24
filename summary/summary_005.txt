@@ -1,0 +1,25 @@
+SESSION 005 (2026-11-23): Switch 2 output size: 1920x1080 handheld, 2560x1440 docked
+PROBLEM FOUND
+  Summary 002 said "swapchain 1920x1080 in both modes", but nothing set the libnx window size on the Vulkan path:
+  window_switch.cpp's 1920x1080 only sized the rex Window object. plume's swapchain takes nwindowGetDimensions,
+  which reports 1280x720 until nwindowSetDimensions is called (libnx native_window.h). Only the deko3d path (Switch 1)
+  set it. So the Switch 2 build would most likely have presented 1280x720 in both modes. The "LO keeps 1080p" note
+  was wrong too: LO outputs 2560x1440 docked (settings/config.cpp Validate, gpu/video.cpp nwindowSetDimensions with a
+  1920x1080 fallback, hbmenu_1440p_fix.txt; LO summary_047/048 logs ran docked at 2560x1440).
+CHANGED
+  thirdparty/plume/plume_vulkan.h/.cpp (in tools/switch/patches/plume-switch2.patch, regenerated; chain verified on a
+    clean e0c8871 copy, host-stage stamp updated): VulkanSetSwapChainSize(w,h) under __SWITCH2__. getWindowSize reports
+    the wanted size (needsResize sees it); resize() destroys the old swapchain, calls nwindowSetDimensions, falls back
+    to 1920x1080 if a >1080p size is refused (log "[plume] the display refused ..."), else keeps the native size.
+  src/platform/switch/switch_tuning.cpp: cvar bd_switch2_docked_output_height (1440 default, 1080 option);
+    ApplySwitch2OutputSize at start (log "Switch 2: <mode> output WxH (start)") and Switch2OutputModeTick on dock
+    change ("dock change"); switch_tuning.h declares it; src/gpu/present.cpp calls it before the resize check.
+  thirdparty/rexglue-sdk/src/ui/window_switch.cpp: comment only.
+  SD profile reblue.toml: bd_switch2_docked_output_height = 1440 line.
+VERIFIED
+  Build 23/23 EXIT=0. reblue.nro sha256 5DC5D6A8...F7184CCA on Desktop and sw2 sd\switch\reblue\ (hashes equal).
+OPEN
+  - Hardware: whether nwindowSetDimensions succeeds after the swapchain is destroyed on a dock change (OunceVK must have
+    released the window's buffers); if not, the log says "nwindowSetDimensions failed" and the old size stays until
+    restart. At start (no swapchain yet) it is the same call LO makes.
+  - The window object (UI/touch scaling) still reports 1920x1080 docked.

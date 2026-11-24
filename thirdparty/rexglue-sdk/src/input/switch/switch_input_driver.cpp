@@ -252,7 +252,14 @@ X_STATUS SwitchInputDriver::Setup() {
     REXLOG_ERROR("SwitchInputDriver: hidInitialize failed: 0x{:08X}", rc);
     return X_STATUS_UNSUCCESSFUL;
   }
+#if REX_PLATFORM_SWITCH2
+  // Blue Dragon is single player. Supporting four npads let Horizon hand a controller player 2-4, which the
+  // game never reads (LostOdysseyRecomp summary_072, "8 player input": padConfigureInput(1, ...)). With one,
+  // any controller becomes player 1. Slots 1-3 stay initialized and never connect.
+  padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+#else
   padConfigureInput(kSlotCount, HidNpadStyleSet_NpadStandard);
+#endif
 
   static constexpr std::array<HidNpadIdType, kSlotCount> kNpadIds = {
       HidNpadIdType_No1, HidNpadIdType_No2, HidNpadIdType_No3, HidNpadIdType_No4};

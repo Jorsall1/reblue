@@ -1,0 +1,19 @@
+SESSION 014 (2026-11-24): crash opening the in-game menu (std::terminate)
+LOG (Desktop\bluedragon\new log\logs, reblue_011 13:50:51, build 36072aef = session 013)
+  "std::terminate with no active exception". rex_crash.log symbolized: TerminateHandler <- std::terminate
+  <- bd::engine::RefreshLanguages <- RegisterVFS <- CampSettings::Tick. Disassembly: the landing pad's
+  joinable-std::thread check; stack holds std::thread::detach -> __throw_system_error. Session 013's
+  language-size worker used std::thread(...).detach(): pthread_detach fails on libnx once the thread has
+  ended (every size cached -> worker returns at once), the throw unwound a joinable temporary -> terminate.
+  (Known issue: bd::DetachThread in src/core/threading.cpp already parks threads on __SWITCH__ for this.)
+CHANGED
+  src/engine/menus/config_menu_data.cpp (__SWITCH2__): worker kept in s_lang_bytes_thread, joined before a
+    new one (only when busy is false: it has ended), never detached; not started when every code already
+    has a size.
+VERIFIED
+  build-switch2.sh EXIT=0, 0 warnings (out/build_014.log). reblue.nro sha256
+  d4abcb593d4c16f2c9b2a2081b0a9cfc332af0a7a5689126226bb1bf35faa586 in out/switch2 and Desktop (equal).
+  Not run on hardware.
+OPEN
+  - Hardware: open/close the camp menu and Settings > Language several times; sizes show "..." then values.
+  - Session 013 open items still stand.

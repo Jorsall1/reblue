@@ -74,7 +74,8 @@ elseif(REXGLUE_PLATFORM_SWITCH)
         dynlib_switch.cpp             # an NRO has no dlopen
         exception_handler_switch.cpp  # a single __libnx_exception_handler
         fiber_switch.cpp              # context switch in assembly, without ucontext
-        guest_memory_switch.cpp       # core: window, mirrors and protection by unmapping
+        guest_memory_switch.cpp       # core: window, mirrors and protection by unmapping (Switch 1)
+        guest_memory_switch2.cpp      # Switch 2 / kaiHEN: Backend::Heap, one memalign block, no svcMap*
         mapped_memory_switch.cpp      # no file mmap: read into RAM with a cap
         memory_switch.cpp             # rex::memory API on top of the core
         seh_switch.cpp                # SEH interface; faults inside SEH scopes are fatal

@@ -26,7 +26,12 @@ REXCVAR_DEFINE_INT32(config_version, 0, "reblue",
 namespace bd {
 namespace {
 
+#if defined(__SWITCH2__)
+// 3: Switch 2 graphics back on the Low preset once (session 013).
+constexpr i32 kConfigVersion = 3;
+#else
 constexpr i32 kConfigVersion = 2;
+#endif
 
 struct Step {
   i32 version;
@@ -63,11 +68,36 @@ void PreserveUngatedPostAndReflections() {
       std::to_string(static_cast<i32>(gpu::ReflectionQuality::High)));
 }
 
+#if defined(__SWITCH2__)
+// The recommended reblue.toml copied with earlier builds pinned 2x shadows
+// (bd_shadow_distance 2.0, bd_shadow_dimension 2048), and the Settings menu
+// tests left supersampling and 8192 maps behind (log 009). The Switch 2 starts
+// once from the Low preset (shadows 1x) for the GPU headroom dynamic
+// resolution needs; anything changed in the menu afterwards is kept.
+void Switch2LowPreset() {
+  const gpu::PresetBundle &p =
+      gpu::kPresets[static_cast<u32>(gpu::QualityPreset::Low)];
+  rex::cvar::SetFlagByName("bd_supersampling", std::to_string(p.superSampling));
+  rex::cvar::SetFlagByName("bd_msaa", std::to_string(p.msaa));
+  rex::cvar::SetFlagByName("bd_anisotropy", std::to_string(p.anisotropy));
+  rex::cvar::SetFlagByName("bd_shadow_distance", "1.0");
+  rex::cvar::SetFlagByName("bd_shadow_dimension", std::to_string(p.shadowDimension));
+  rex::cvar::SetFlagByName("bd_post_quality",
+                           std::to_string(static_cast<i32>(p.postQuality)));
+  rex::cvar::SetFlagByName("bd_reflection_quality",
+                           std::to_string(static_cast<i32>(p.reflectionQuality)));
+}
+#endif
+
 constexpr Step kSteps[] = {
     {1, "window size split from render resolution",
      SplitWindowSizeFromResolution},
     {2, "post and reflection cost held at what it was",
-     PreserveUngatedPostAndReflections}};
+     PreserveUngatedPostAndReflections},
+#if defined(__SWITCH2__)
+    {3, "Switch 2: graphics on the Low preset (shadows 1x)", Switch2LowPreset},
+#endif
+};
 
 } // namespace
 

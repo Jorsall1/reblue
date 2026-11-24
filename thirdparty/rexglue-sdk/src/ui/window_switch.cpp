@@ -71,6 +71,14 @@ SwitchWindowedAppContext& WindowSwitch::switch_app_context() const {
  * The applet's resolution is only used if it agrees with the effective mode; otherwise the mode rules.
  */
 void WindowSwitch::QueryDisplayResolution(uint32_t& width_out, uint32_t& height_out) {
+#if defined(__SWITCH2__)
+  // Switch 2: the window object's logical size only (UI and touch scaling).
+  // The swapchain size is re:Blue's: 1920x1080 handheld, 2560x1440 docked
+  // (switch_tuning.cpp ApplySwitch2OutputSize -> plume VulkanSetSwapChainSize).
+  width_out = 1920;
+  height_out = 1080;
+  return;
+#endif
   const bool docked =
       rex::ui::switch_saltynx::ModoBase(appletGetOperationMode() == AppletOperationMode_Console);
   s32 width = 0;

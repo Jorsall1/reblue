@@ -25,7 +25,15 @@ REXCVAR_DECLARE(i32, bd_glyph_set);
 REXCVAR_DECLARE(bool, bd_vibration);
 REXCVAR_DECLARE(f64, bd_camera_speed);
 
-REXCVAR_DEFINE_INT32(bd_fps_limit, 0, kCvarGroup,
+// Switch 2: 60, as LostOdysseyRecomp (settings/config.h frameRate = 60: the
+// screen is 60 Hz and it holds 60). An explicit cap rather than unlimited, so a
+// 120 Hz output cannot run the interpolation past 60.
+#if defined(__SWITCH2__)
+constexpr i32 kDefaultFpsLimit = 60;
+#else
+constexpr i32 kDefaultFpsLimit = 0;
+#endif
+REXCVAR_DEFINE_INT32(bd_fps_limit, kDefaultFpsLimit, kCvarGroup,
                      "Frame-rate cap: 0 = unlimited, above 30 the fixed 30Hz "
                      "simulation is interpolated.");
 
@@ -89,7 +97,15 @@ Settings &Settings::Get() {
   return s;
 }
 
-void Settings::AdoptFPSLimit() { fpsLimit_ = REXCVAR_GET(bd_fps_limit); }
+void Settings::AdoptFPSLimit() {
+  fpsLimit_ = REXCVAR_GET(bd_fps_limit);
+#if defined(__SWITCH2__)
+  // 30-120 (the menu's range); an old Unlimited (0) becomes 120.
+  if (fpsLimit_ <= 0 || fpsLimit_ > 120)
+    fpsLimit_ = 120;
+  fpsLimit_ = std::max(fpsLimit_, 30);
+#endif
+}
 
 void Settings::AdoptSaveAnywhere() {
   saveAnywhere_ = REXCVAR_GET(bd_save_anywhere);

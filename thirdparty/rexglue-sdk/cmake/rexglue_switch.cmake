@@ -31,6 +31,15 @@ if(REXGLUE_SWITCH_DEKO3D)
         target_link_libraries(rexglue_switch_gpu INTERFACE ${_deko3d} nx stdc++ m)
         target_link_options(rexglue_switch_gpu INTERFACE -pthread)
     endif()
+elseif(REXGLUE_PLATFORM_SWITCH2)
+    # Switch 2: OunceVK, not Mesa NVK. The title defines rex::switch_gpu before
+    # the SDK is added (reblue: cmake/switch2.cmake), because the driver archive
+    # has to be symbol-prefixed for volk (cmake/PrefixOunceVK.cmake).
+    if(NOT TARGET rex::switch_gpu)
+        message(FATAL_ERROR
+            "REXGLUE_PLATFORM_SWITCH2: define rex::switch_gpu (OunceVK) before adding the SDK "
+            "(reblue's cmake/switch2.cmake does)")
+    endif()
 elseif(NOT EXISTS "${REXGLUE_SWITCH_NVK_SDK}/lib/libvulkan.a")
     message(FATAL_ERROR
         "REXGLUE_SWITCH_NVK_SDK must point at <mesa-...-horizon-sdk>/opt/devkitpro/portlibs/switch "
@@ -42,7 +51,7 @@ endif()
 # instead; the NVIDIA CUBIN parser that uses libelf never runs on Switch.
 # Listed twice for archive rescanning, as the Mesa config does without
 # LINK_GROUP support.
-if(NOT REXGLUE_SWITCH_DEKO3D AND NOT TARGET rex::nvk)
+if(NOT REXGLUE_SWITCH_DEKO3D AND NOT REXGLUE_PLATFORM_SWITCH2 AND NOT TARGET rex::nvk)
     add_library(rexglue_switch_nvk INTERFACE)
     add_library(rex::nvk ALIAS rexglue_switch_nvk)
     add_library(rex::switch_gpu ALIAS rexglue_switch_nvk)
@@ -80,7 +89,9 @@ if(NOT TARGET rexglue_switch_startup)
         # FPS and resolution for the console overlays (SaltyNX) and Reverse-NX reading.
         "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_saltynx.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_sysclk.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_apm.cpp")
+        "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch_apm.cpp"
+        # Switch 2 / kaiHEN: the exit back to hbmenu (empty on Switch 1).
+        "${CMAKE_CURRENT_LIST_DIR}/../src/ui/switch2_exit.cpp")
     # switch_perf.cpp registers every thread (the profiler needs their handles)
     # by wrapping libnx's threadCreate/threadClose, which pthread goes through.
     # It also counts the libnx calls that cost IPC or walk memory (fences,
@@ -155,7 +166,11 @@ function(rexglue_switch_add_nro target_name)
         endif()
     endif()
     if(NOT ARG_ICON)
-        set(ARG_ICON "${DEVKITPRO}/libnx/default_icon.jpg")
+        if(REXGLUE_PLATFORM_SWITCH2)
+            set(ARG_ICON "${DEVKITPRO}/libounce/default_icon.jpg")
+        else()
+            set(ARG_ICON "${DEVKITPRO}/libnx/default_icon.jpg")
+        endif()
     endif()
 
     find_program(REXGLUE_NACPTOOL nacptool HINTS "${DEVKITPRO}/tools/bin" NO_DEFAULT_PATH REQUIRED)

@@ -12,6 +12,7 @@
 #include "gpu/output.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include <rex/hook.h>
@@ -175,24 +176,44 @@ void ResizeStaleRenderTargets(rex::CallFrame &frame, u8 *base, u32 node, u32 w,
   }
 }
 
+// The rebuild's pieces in ms ([output-res] rebuild timing): the step frame
+// had 20-98 ms of CPU in the 2026-11-24 log, about 1.5-2 ms per texture made,
+// while creating the textures took 1-2 ms in all.
+struct RebuildTiming {
+  double screens = 0, composite = 0, camera = 0, backbuffer = 0, stale = 0, game = 0;
+};
+RebuildTiming g_rebuild_timing;
+
+double MsSince(std::chrono::steady_clock::time_point &t) {
+  const auto now = std::chrono::steady_clock::now();
+  const double ms = std::chrono::duration<double, std::milli>(now - t).count();
+  t = now;
+  return ms;
+}
+
 void RebuildForOutputSize(rex::CallFrame &frame, u8 *base, u32 w, u32 h) {
   const u32 render = bd::engine::VisualRender::Get().Address();
   if (!render)
     return;
 
+  auto t = std::chrono::steady_clock::now();
   WriteGuestOutputDims(w, h);
   for (const u32 screen : kVisualRenderScreens)
     CreateDynamicTexture(frame, base, render + screen, w, h, 1, kScreenFormat);
+  g_rebuild_timing.screens = MsSince(t);
   CreateDynamicTexture(frame, base, kCompositeScreenEA, w, h, 1,
                        kCompositeFormat);
+  g_rebuild_timing.composite = MsSince(t);
 
   CameraViewInit(frame, base, render, 0);
+  g_rebuild_timing.camera = MsSince(t);
   BD_INFO("[output-res] engine surfaces rebuilt at {}x{}", w, h);
   // The back buffer with them: left to the end of the next presented frame,
   // the frames between drew the new size into the old back buffer (the
   // picture shrunk into the top-left corner), and the present's hold, which
   // skips those frames, kept it from being resized at all.
   bd::gpu::Video::SyncBackBufferSize();
+  g_rebuild_timing.backbuffer = MsSince(t);
 }
 
 } // namespace
@@ -216,7 +237,8 @@ REX_HOOK_RAW(bdCreateRenderTargetTextures) {
     rex::CallFrame frame(ctx);
     static u32 applied = Output::Generation();
     const u32 generation = Output::Generation();
-    if (generation != applied) {
+    const bool changed = generation != applied;
+    if (changed) {
       applied = generation;
       RebuildForOutputSize(frame, base, w, h);
       // The game read the size it passes here (f1/f2) before the rebuild
@@ -225,8 +247,18 @@ REX_HOOK_RAW(bdCreateRenderTargetTextures) {
       // frame was drawn at the new one (the picture shrunk into the top-left
       // corner at each dynamic resolution change). The old render size
       // becomes the new one here, on this call too.
-      const bool stale = want_w == ((old_w + 7) & ~7u) &&
-                         want_h == ((old_h + 7) & ~7u) &&
+      // Not only an exact match of the old render rect: the game sometimes
+      // derives the width from the height (608 * 16 / 9 = 1080 against the
+      // 1088 rect), and a 612 -> 648 step up then kept 1080x608 targets
+      // under 1152x648 surfaces (a colour target and a depth surface of two
+      // sizes in one framebuffer: drawn past the smaller one's end; the
+      // process died when the field resumed). At the change a size near
+      // the old one (16 pixels either way) was read before the rebuild.
+      const auto near = [](u32 a, u32 b) { return (a > b ? a - b : b - a) <= 16; };
+      const bool stale = (want_w != ((w + 7) & ~7u) ||
+                          want_h != ((h + 7) & ~7u)) &&
+                         near(want_w, (old_w + 7) & ~7u) &&
+                         near(want_h, (old_h + 7) & ~7u) &&
                          (old_w != w || old_h != h);
       BD_INFO("[output-res] targets asked for {}x{} at the change{}", want_w,
               want_h, stale ? " (the old size: given the new one)" : "");
@@ -237,7 +269,20 @@ REX_HOOK_RAW(bdCreateRenderTargetTextures) {
         want_h = (h + 7) & ~7u;
       }
     }
+    auto t = std::chrono::steady_clock::now();
     ResizeStaleRenderTargets(frame, base, head, want_w, want_h);
+    if (changed) {
+      g_rebuild_timing.stale = MsSince(t);
+      __imp__bdCreateRenderTargetTextures(ctx, base);
+      g_rebuild_timing.game = MsSince(t);
+      const auto &r = g_rebuild_timing;
+      BD_INFO("[output-res] rebuild timing: screens {:.1f} ms, composite {:.1f}, camera view "
+              "{:.1f}, back buffer {:.1f}, stale targets {:.1f}, the game's target list {:.1f} "
+              "(total {:.1f})",
+              r.screens, r.composite, r.camera, r.backbuffer, r.stale, r.game,
+              r.screens + r.composite + r.camera + r.backbuffer + r.stale + r.game);
+      return;
+    }
   }
   __imp__bdCreateRenderTargetTextures(ctx, base);
 }

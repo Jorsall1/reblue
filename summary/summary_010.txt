@@ -1,0 +1,35 @@
+SESSION 010 (2026-11-23): silent death after a movie, dynamic resolution resizing
+LOGS (Desktop\bluedragon\logs, reblue_004.log)
+  rex_session.txt still "running", no rex_crash.log: a silent kill again (not an abort, not a CPU fault).
+  Last log line 19:33:47.29: movie ev401 stopped; the last 1 s snapshot (rex_ultimo_a, 30 fps = the movie) shows
+  every thread idle in normal waits (symbolized with out/sym.sh against out/switch2/reblue.elf).
+  The step before: [dynres] 612 -> 648 at 19:33:39 during the movie, "targets asked for 1080x608 at the change"
+  WITHOUT "(the old size: given the new one)". The old rect was 1088x608 (612 rounded to 608; the game derives
+  1080 = 608*16/9 from the height in places), so the exact-match stale check missed it and
+  ResizeStaleRenderTargets resized the render target list back to 1080x608 under 1152x648 surfaces.
+  [gpu-passes] at 19:33:46 still lists 1080x608 and 1088x608+depth targets. When the field resumed after the movie,
+  colour and depth of two sizes met in one framebuffer (plume sizes it from the colour target): depth written past
+  the smaller image's end -> GPU fault -> process ended with no report. Likely cause, not proven on hardware.
+  Also in the log: 12 resizes in 60 s (1080 -> 648 in 36-line steps, ~5.5 s apart), GPU ms followed the scene
+  more than the size; ~5 ms a frame (start of frame 2.4, present 1.7, 2048 shadow map 0.9) does not scale.
+CHANGED
+  src/gpu/hooks/output.cpp bdCreateRenderTargetTextures: at a resolution change, an asked size within 16 px of
+    the old rect (and not the new one) counts as stale and is replaced by the new size.
+  src/gpu/draw_framebuffer.cpp ResolveEffectiveTargets (__SWITCH2__): a depth surface smaller than its colour
+    target is dropped for that draw ([framebuffer] warning, 16 max, flushed at once); draw.cpp's pipeline choice
+    uses the same pair.
+  src/platform/switch/switch_tuning.cpp + switch_tuning.h: Switch 2 heights in 72-line steps (kSwitch2HeightStep;
+    rects exact: no 608/1088 rounding), range ends rounded to 72. GPU time split into size-independent part
+    (new fixed_ms argument, default 0 = Switch 1 unchanged) and the part that scales with pixels; step up predicted
+    with that split; a step down may skip up to 3 steps to the height predicted under 95% of the budget.
+    [dynres] line now prints the size-independent ms.
+  src/gpu/pass_timer.cpp Collect: fixed_ms = "start of frame" + "present" + "depth only 2048x2048" passes.
+VERIFIED
+  build-switch2.sh Done (out/build_010.log, no warnings/errors). reblue.nro 47,608,727 bytes, sha256
+  ed0fdf58...44784402 in out/switch2, Desktop, sw2 sd\switch\reblue (equal). Not run on hardware.
+OPEN
+  - Hardware: after a movie with a resolution change in it, no death; "targets asked ... (the old size...)" on every
+    change; a "[framebuffer] depth ... smaller" warning means another mismatch source is left.
+  - Resizes should be fewer (72-line steps, multi-step down). The one-frame glitch at each change remains;
+    fixed max-size targets with a sub-rectangle is still the real fix (not started).
+  - Session 009 open items (mutexLock svcBreak) unchanged.

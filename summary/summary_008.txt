@@ -1,0 +1,32 @@
+SESSION 008 (2026-11-23): Switch 2 dynamic resolution: resizing every 3 s, then a crash
+(logs Desktop\bluedragon\logs, reblue_002.log). Dynamic resolution stays ON (user's requirement).
+CAUSE OF THE RESIZING
+  The render height stepped down 36 lines every ~3 s, 1080 -> 648 in 33 s, never up. Its input was wrong:
+  22.6 ms of GPU work a frame at 59.8 fps (135% of wall time). plume's 625/384 timestampPeriod correction (from
+  plume-switch.patch) applied on Switch 2 too, so every OunceVK reading was 1.63x too long. Corrected: ~16.3 ms at
+  1080, ~13.5 at 900, ~11.6 at 648 (budget 15.5).
+CRASH (no rex_crash.log, nothing in rex_stderr.log; the log stops 1-2 s after the 12th surface rebuild)
+  Found in the rebuild path: Video::SyncBackBufferSizeLocked recreated the back buffer but only cleared its own
+  framebuffer cache. Framebuffers pairing the old back buffer with a depth surface stay in the depth surface's
+  cache, keyed by the old plume::RenderTexture address. A new texture at a reused address then hits a stale
+  framebuffer of a destroyed image at the old size. Likely cause, not proven on hardware.
+CHANGED
+  thirdparty/plume/plume_vulkan.cpp + tools/switch/patches/plume-switch2.patch (regenerated, only this hunk new):
+    timestamp correction `__SWITCH__ && !__SWITCH2__`.
+  src/gpu/device.cpp SyncBackBufferSizeLocked: before recreating, drop every framebuffer keyed by the old back
+    buffer texture from all framebuffer_owners, clear framebufferAttached, draw_framebuffer_bound = false.
+  src/platform/switch/switch_tuning.cpp SwitchDynamicResolutionFrame (Switch 2 constants): 4 s between changes,
+    1.5 s over budget to step down, 4 s predicted under 90% to step up, no step up within 10 s of a step down.
+    Default bd_switch_dynamic_resolution stays true; the SD reblue.toml keeps true (restored after a revert).
+VERIFIED
+  host-stage.sh (re-applied plume patches) + build-switch2.sh EXIT=0, no warnings in the changed files.
+  reblue.nro 47,608,727 bytes, sha256 A8443B27FCCD4F4D...E9CCFADB in out/switch2, Desktop, sw2 sd\switch\reblue.
+  Not run on hardware.
+OPEN
+  - Hardware: [dynres] should stop near 1000-1080 handheld with changes >= 4 s apart; [gpu-passes] GPU ms a frame
+    should stay below the frame time.
+  - If it still dies after rebuilds: bd_switch_dynamic_test_s 5 forces a rebuild every 5 s to reproduce; next
+    suspects are guest surfaces (RebuildForOutputSize -> CreateDynamicTexture releases then recreates; host
+    textures go through the fence graveyard) and the FSR present at the new size.
+  - Visual glitch at each change (one frame drawn at the new size) is not addressed; LO's host-side approach is
+    the long-term fix.

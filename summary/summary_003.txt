@@ -1,0 +1,30 @@
+SESSION 003 (2026-11-23): Switch 2 max clocks, SD card layout
+CHANGED
+  src/platform/switch/switch_tuning.cpp (all under __SWITCH2__):
+    StartMaxClocks() from ApplySwitchClocks: a thread (prio 0x3B) opens clkrst sessions for CpuBus, GPU, EMC, reads
+    each pcv table (clkrstGetPossibleClockRates) and sets the highest rate (clkrstSetClockRate); checks once a second
+    and sets it again after dock/undock/sleep; logs "[Switch 2: <mode> clocks: ...]" on every mode change; a refused
+    set stops that domain. Ends at exit through the svcSleepThread wrap. Switch 1 apm path unchanged (Switch 2 already
+    has bd_switch_gpu_mhz 0).
+    Cvars: bd_switch2_max_clocks (true), bd_switch2_cpu_cap_mhz, bd_switch2_gpu_handheld_cap_mhz,
+    bd_switch2_gpu_docked_cap_mhz, bd_switch2_emc_cap_mhz (0 = table's highest).
+VERIFIED
+  Incremental build 12/12, EXIT=0. ELF has clkrstSetClockRate / clkrstGetPossibleClockRates and the new strings.
+  reblue.nro 47,604,631 bytes, sha256 6c218ff7...5baa75e02 -> Desktop\reblue.nro and the SD layout.
+SD LAYOUT  C:\Users\Jorda\Desktop\bluedragon\sw2 sd\
+  switch/reblue/reblue.nro
+  switch/reblue/cache/pack_index.bin        from the Switch 1 v1.3.6 release (stamp-checked, rebuilt if stale)
+  switch/reblue/profiles/default/reblue.toml  the v1.3.6 profile minus deko3d / Switch 1 resolution lines, plus the
+                                              Switch 2 fps/dynres/FSR/clock settings
+  switch/reblue/game/PUT_GAME_FILES_HERE.txt  game data not copied
+  Not taken from the Switch 1 release: deko3d_shaders_431/447.bin (deko3d DKSH, no deko3d on Switch 2),
+  vulkan_pipelines.bin (Switch 1 GPU/driver pipeline cache; OunceVK rejects a foreign header), reblue.nro/.elf.
+UPDATE (same session): bd_switch2_max_clocks now defaults to FALSE, as LostOdysseyRecomp: the system's stock game
+  clocks (LO measured handheld CPU 1101 / GPU 561 / mem 2133 MHz, docked CPU 998 / GPU 1007; LO summary_036/083:
+  apm config requests have no effect on Switch 2, nothing higher is available to an application). true = the clkrst
+  overclock path above. SD reblue.toml set to false. Rebuilt EXIT=0; reblue.nro sha256 C5A7111CD185E72F...,
+  copied to Desktop and sw2 sd\switch\reblue\.
+OPEN
+  - Untested on hardware: whether clkrst set is permitted under kaiHEN's donor title, which rates the tables list,
+    and heat/battery at the top handheld GPU rate (caps exist for that).
+  - Clocks are not put back when re:Blue exits to hbmenu (the system resets them when the donor process ends).

@@ -15,16 +15,23 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include <plume_render_interface.h>
 #if defined(PLUME_DEKO3D)
 #include <plume_deko3d.h>
 #endif
+#if defined(__SWITCH2__)
+#include <plume_vulkan.h>
+#endif
 
 #include "gpu/gpu_profiling.h"
 
 #include "core/logging.h"
+#if defined(__SWITCH__)
+#include <rex/filesystem.h>
+#endif
 #include "engine/engine.h"
 #include "gpu/backend.h"
 #include "engine/frame_clock.h"
@@ -48,6 +55,51 @@ extern "C" unsigned long long rex_sd_reads, rex_sd_read_bytes, rex_sd_read_ticks
 namespace bd::gpu {
 
 namespace {
+
+#if defined(__SWITCH2__)
+// What the top-left HUD (bd_switch2_show_fps) and the "[fsr]" log line read:
+// the image the present pass really scaled, and the frame rate over 0.5 s
+// windows of presents. Plain atomics, written once per present.
+std::atomic<u32> g_hud_src{0};      // width | height << 16
+std::atomic<u32> g_hud_fps_x10{0};  // frames per second, times 10
+std::atomic<bool> g_hud_fsr{false};
+
+void NoteSwitch2Present(u32 src_w, u32 src_h, u32 dst_w, u32 dst_h, bool fsr,
+                        bool fsr_available) {
+  using Clock = std::chrono::steady_clock;
+  static Clock::time_point window{};
+  static u32 frames = 0;
+  const Clock::time_point now = Clock::now();
+  if (window == Clock::time_point{})
+    window = now;
+  ++frames;
+  const double ms = std::chrono::duration<double, std::milli>(now - window).count();
+  if (ms >= 500.0) {
+    g_hud_fps_x10.store(u32(double(frames) * 10000.0 / ms + 0.5), std::memory_order_relaxed);
+    frames = 0;
+    window = now;
+  }
+  g_hud_src.store((src_w & 0xFFFF) | (src_h << 16), std::memory_order_relaxed);
+  g_hud_fsr.store(fsr, std::memory_order_relaxed);
+
+  // One line whenever the upscale decision or the image size changes, so a
+  // log shows whether FSR 1 really ran (session 013: it was only inferred
+  // from the present pass cost, 1.7 ms against 0.9-1.0 at native).
+  static u32 last_key = ~0u;
+  static bool last_fsr = false;
+  const u32 key = (src_w & 0xFFFF) | (src_h << 16);
+  if (key != last_key || fsr != last_fsr) {
+    last_key = key;
+    last_fsr = fsr;
+    const bool smaller = src_w < dst_w || src_h < dst_h;
+    BD_INFO("[fsr] present {}x{} -> {}x{}: {}", src_w, src_h, dst_w, dst_h,
+            fsr               ? "FSR 1 (EASU) upscale"
+            : !smaller        ? "native size, no upscale"
+            : !fsr_available  ? "bilinear (FSR 1 pipeline missing)"
+                              : "bilinear (FSR off: bd_switch_fsr)");
+  }
+}
+#endif
 
 #if defined(__SWITCH__)
 // Frame timing on the console, logged every 10 s: where each frame's time goes
@@ -109,6 +161,8 @@ public:
     u64 sdReads = 0, sdBytes = 0, sdTicks = 0;
     u64 textures = 0, textureUs = 0, pipelines = 0, pipelineUs = 0;
     u64 syncUs = 0, compiles = 0, uploads = 0, draws = 0;
+    u64 ns = 0; // steady_clock, for the files read during the frame
+    u64 framebuffers = 0, framebufferUs = 0;
   };
   static Snapshot Take() {
     Snapshot n;
@@ -119,7 +173,12 @@ public:
     n.textureUs = g_creations.textures.us.load(std::memory_order_relaxed);
     n.pipelines = g_creations.pipelines.count.load(std::memory_order_relaxed);
     n.pipelineUs = g_creations.pipelines.us.load(std::memory_order_relaxed);
+    n.framebuffers = g_creations.framebuffers.count.load(std::memory_order_relaxed);
+    n.framebufferUs = g_creations.framebuffers.us.load(std::memory_order_relaxed);
     n.syncUs = rq::SyncMicrosTotal();
+    n.ns = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count());
 #if defined(PLUME_DEKO3D)
     if (UsingDeko3D()) {
       const auto &st = plume::GetDeko3DStats();
@@ -130,6 +189,19 @@ public:
 #endif
     return n;
   }
+  // The files behind the frame's SD reads (the SDK's FileHandle::Read
+  // ring): " | files: pack/x.ipk 14.9 MB in 15 reads (54.7 ms), ...".
+  static std::string FilesRead(u64 since_ns) {
+    std::string s;
+#if defined(__SWITCH__)
+    for (const auto &f : rex::filesystem::RecentSdReads(since_ns, 3))
+      s += fmt::format("{}{} {:.2f} MB in {} reads ({:.1f} ms)", s.empty() ? " | files: " : ", ",
+                       f.name, double(f.bytes) / 1048576.0, f.reads, double(f.ns) / 1e6);
+#else
+    (void)since_ns;
+#endif
+    return s;
+  }
   void NoteFrame(double frame_ms, double fence_ms, double pace_ms) {
     const Snapshot n = Take();
     const Snapshot &o = snap_;
@@ -137,17 +209,68 @@ public:
       ++hitches_logged_;
       BD_INFO("[hitch] {:.0f} ms frame: GPU wait {:.1f} ms, pacing {:.1f} ms, waits for the render thread "
               "{:.1f} ms | SD reads {} ({:.2f} MB, {:.1f} ms) | created: {} textures ({:.1f} ms), {} pipelines "
-              "({:.1f} ms) | {} uam compiles, {} uploads, {} draws",
+              "({:.1f} ms) | {} uam compiles, {} uploads, {} draws{}",
               frame_ms, fence_ms, pace_ms, double(n.syncUs - o.syncUs) / 1e3, n.sdReads - o.sdReads,
               double(n.sdBytes - o.sdBytes) / 1048576.0, double(n.sdTicks - o.sdTicks) / 19200.0,
               n.textures - o.textures, double(n.textureUs - o.textureUs) / 1e3, n.pipelines - o.pipelines,
               double(n.pipelineUs - o.pipelineUs) / 1e3, n.compiles - o.compiles, n.uploads - o.uploads,
-              n.draws - o.draws);
+              n.draws - o.draws, n.sdReads != o.sdReads ? FilesRead(o.ns) : std::string());
     }
+#if defined(__SWITCH2__)
+    NoteStepFrame(frame_ms, fence_ms, pace_ms, n, o);
+#endif
     snap_ = n;
   }
   Snapshot snap_ = Take();
   u32 hitches_logged_ = 0;
+
+#if defined(__SWITCH2__)
+  // [dynres] step cost: the frames from a render size change on (a new
+  // Output generation, dynamic resolution or the dock), one line once
+  // kStepFrames are in. Each step missed about one vblank in the session 015
+  // logs (worst 33-49 ms in a window with a change, 17-22 without), under the
+  // 100 ms the [hitch] line needs. Per frame: total ms, then GPU wait (g),
+  // pacing (p), the CPU rest (c), and textures created (t count/ms) when any.
+  static constexpr u32 kStepFrames = 8;
+  void NoteStepFrame(double frame_ms, double fence_ms, double pace_ms, const Snapshot &n,
+                     const Snapshot &o) {
+    const u32 gen = Output::Generation();
+    if (gen != step_gen_) {
+      step_gen_ = gen;
+      step_frames_ = kStepFrames;
+      step_line_.clear();
+      step_worst_ = 0.0;
+    }
+    if (!step_frames_)
+      return;
+    const double cpu = std::max(0.0, frame_ms - fence_ms - pace_ms);
+    step_line_ += fmt::format("{}{:.1f} (g {:.1f} p {:.1f} c {:.1f}", step_line_.empty() ? "" : ", ",
+                              frame_ms, fence_ms, pace_ms, cpu);
+    if (n.textures != o.textures)
+      step_line_ += fmt::format(" t {}/{:.1f}", n.textures - o.textures,
+                                double(n.textureUs - o.textureUs) / 1e3);
+    if (n.pipelines != o.pipelines)
+      step_line_ += fmt::format(" pso {}/{:.1f}", n.pipelines - o.pipelines,
+                                double(n.pipelineUs - o.pipelineUs) / 1e3);
+    if (n.framebuffers != o.framebuffers)
+      step_line_ += fmt::format(" fb {}/{:.1f}", n.framebuffers - o.framebuffers,
+                                double(n.framebufferUs - o.framebufferUs) / 1e3);
+    step_line_ += ")";
+    step_worst_ = std::max(step_worst_, frame_ms);
+    if (--step_frames_ == 0 && steps_logged_ < 60) {
+      ++steps_logged_;
+      u32 w = 0, h = 0;
+      Output::RenderSize(w, h);
+      BD_INFO("[dynres] step cost at {}x{}: worst {:.1f} ms | frames {}", w, h, step_worst_,
+              step_line_);
+    }
+  }
+  u32 step_gen_ = Output::Generation();
+  u32 step_frames_ = 0;
+  u32 steps_logged_ = 0;
+  double step_worst_ = 0.0;
+  std::string step_line_;
+#endif
 
 #if defined(PLUME_DEKO3D)
   // The deko3d back end's counters over the window, per frame: what the GPU is asked to wait for and copy.
@@ -217,9 +340,33 @@ FrameStats &Stats() {
 #endif
 
 void ApplyVsync(VideoState &s) {
-  if (s.swap_chain) {
-    s.swap_chain->setVsyncEnabled(Settings::Get().Vsync());
+  if (!s.swap_chain)
+    return;
+#if defined(__SWITCH2__)
+  // OunceVK offers FIFO and MAILBOX, no IMMEDIATE ("present mode FIFO
+  // (immediate no, mailbox yes)"), so plume's vsync off fell back to FIFO and
+  // a 90 / 120 fps cap still ran at the panel's 60. Above 60 fps (or vsync
+  // off) the swapchain uses MAILBOX: no tearing, frames are not held for the
+  // vblank, the limiter (PaceFrame) sets the rate. needsResize() then rebuilds
+  // the swapchain once, at the change.
+  {
+    auto *vk = static_cast<plume::VulkanSwapChain *>(s.swap_chain.get());
+    const i32 fps = bd::engine::Settings::Get().FPSLimit();
+    const bool uncapped = fps <= 0 || fps > 60 || !Settings::Get().Vsync();
+    const VkPresentModeKHR want =
+        (uncapped && vk->mailboxPresentModeSupported) ? VK_PRESENT_MODE_MAILBOX_KHR
+                                                      : VK_PRESENT_MODE_FIFO_KHR;
+    if (vk->requiredPresentMode != want) {
+      vk->requiredPresentMode = want;
+      BD_INFO("[frames] present mode -> {} (fps cap {}, vsync {})",
+              want == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO", fps,
+              Settings::Get().Vsync() ? "on" : "off");
+    }
+    return;
   }
+#else
+  s.swap_chain->setVsyncEnabled(Settings::Get().Vsync());
+#endif
 }
 
 constexpr i32 kIdleFPS = 30;
@@ -239,8 +386,17 @@ void PaceFrame(bool idle = false) {
     next = {};
     return;
   }
+  double rate = fps;
+#if defined(__SWITCH2__)
+  // The 60 fps default with vsync: the display paces the frames. A limiter at
+  // exactly 60.0 against a panel a hair under 60 Hz runs ahead, then waits a
+  // whole vblank (a dropped frame every few seconds); at 61 it never holds a
+  // frame vsync would have shown, and still caps a 120 Hz output near 60.
+  if (fps == 60 && Settings::Get().Vsync())
+    rate = 61.0;
+#endif
   const auto period = std::chrono::duration_cast<Clock::duration>(
-      std::chrono::duration<double, std::milli>(1000.0 / fps));
+      std::chrono::duration<double, std::milli>(1000.0 / rate));
   const auto now = Clock::now();
   if (next.time_since_epoch().count() != 0 && now < next) {
     std::this_thread::sleep_until(next);
@@ -355,6 +511,10 @@ void RecordPresentPass(VideoState &s, GuestTexture *rt,
                    bd::platform::SwitchFsrWanted(rt->width, rt->height, fit_w,
                                                  fit_h) &&
                    fit_w < 65536 && fit_h < 65536;
+#if defined(__SWITCH2__)
+  NoteSwitch2Present(rt->width, rt->height, fit_w, fit_h, fsr,
+                     s.fsr_easu_pipeline != nullptr);
+#endif
   s.command_list->setPipeline(fsr ? s.fsr_easu_pipeline.get()
                                   : s.gamma_correction_pipeline.get());
   struct PresentPushConstants {
@@ -431,6 +591,9 @@ void Video::Present(GuestTexture *frontBuffer) {
 
   const bool resize_requested =
       s.resize_requested.exchange(false, std::memory_order_acq_rel);
+#if defined(__SWITCH2__)
+  bd::platform::Switch2OutputModeTick();
+#endif
   if (s.swap_chain->needsResize() || resize_requested) {
     RebuildSwapChain(s);
   }
@@ -685,5 +848,86 @@ void Video::PresentOverlayFrame() {
   lock.unlock();
   DrainSlot(s, reclaimed);
 }
+
+void Video::PresentBootProgress(float fraction) {
+  auto &s = state();
+  if (s.shutting_down.load(std::memory_order_acquire))
+    return;
+  std::unique_lock lock(s.mutex);
+  // s.ready: the guest tail ran and Present owns the swap chain from here.
+  if (!s.swap_chain || s.ready || s.framebuffers.empty())
+    return;
+
+  const u32 cur = s.frame.load(std::memory_order_relaxed);
+  u32 texture_index = 0;
+  if (!s.swap_chain->acquireTexture(s.acquire_semaphores[cur].get(),
+                                    &texture_index))
+    return;
+  plume::RenderTexture *back = s.swap_chain->getTexture(texture_index);
+  plume::RenderFramebuffer *back_fb = s.framebuffers[texture_index].get();
+  const i32 w = static_cast<i32>(s.swap_chain->getWidth());
+  const i32 h = static_cast<i32>(s.swap_chain->getHeight());
+
+  BeginCommandList(s);
+  if (!s.command_list_open)
+    return;
+
+  // 70% of the width, centred, 7% above the bottom edge; 8 px at 1080p.
+  fraction = std::clamp(fraction, 0.0f, 1.0f);
+  const i32 thick = std::max<i32>(4, h / 135);
+  const i32 left = w * 15 / 100;
+  const i32 right = w - left;
+  const i32 bottom = h - h * 7 / 100;
+  const i32 top = bottom - thick;
+  const i32 fill = left + static_cast<i32>(float(right - left) * fraction);
+
+  s.command_list->barriers(plume::RenderBarrierStage::GRAPHICS,
+                           plume::RenderTextureBarrier(
+                               back, plume::RenderTextureLayout::COLOR_WRITE));
+  s.command_list->setFramebuffer(back_fb);
+  s.command_list->setViewports(plume::RenderViewport(
+      0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)));
+  s.command_list->setScissors(plume::RenderRect(0, 0, w, h));
+  s.command_list->clearColor(0, plume::RenderColor(0.0f, 0.0f, 0.0f, 1.0f));
+  const plume::RenderRect track(left, top, right, bottom);
+  s.command_list->clearColor(0, plume::RenderColor(0.16f, 0.16f, 0.18f, 1.0f),
+                             &track, 1);
+  if (fill > left) {
+    const plume::RenderRect done(left, top, fill, bottom);
+    s.command_list->clearColor(0, plume::RenderColor(0.55f, 0.75f, 1.0f, 1.0f),
+                               &done, 1);
+  }
+  s.command_list->setFramebuffer(nullptr);
+  s.command_list->barriers(
+      plume::RenderBarrierStage::GRAPHICS,
+      plume::RenderTextureBarrier(back, plume::RenderTextureLayout::PRESENT));
+
+  s.command_lists[cur]->end();
+  s.command_list_open = false;
+  const plume::RenderCommandList *lists[] = {s.command_lists[cur].get()};
+  plume::RenderCommandSemaphore *waits[] = {s.acquire_semaphores[cur].get()};
+  plume::RenderCommandSemaphore *signals[] = {
+      s.render_semaphores[texture_index].get()};
+  s.queue->executeCommandLists(lists, 1, waits, 1, signals, 1,
+                               s.fences[cur].get());
+  s.command_list_submitted[cur] = true;
+  if (!s.swap_chain->present(texture_index, signals, 1)) {
+    CheckDeviceRemoved("swapchain present (boot progress)");
+  }
+  AdvanceAndWaitReused(s);
+  const u32 reclaimed = s.frame.load(std::memory_order_relaxed);
+  lock.unlock();
+  DrainSlot(s, reclaimed);
+}
+
+#if defined(__SWITCH2__)
+void Video::Switch2HudStats(float &fps, u32 &w, u32 &h, bool &fsr) {
+  fps = float(g_hud_fps_x10.load(std::memory_order_relaxed)) / 10.0f;
+  const u32 src = g_hud_src.load(std::memory_order_relaxed);
+  w = src & 0xFFFF;
+  h = src >> 16;
+  fsr = g_hud_fsr.load(std::memory_order_relaxed);
+}
+#endif
 
 } // namespace bd::gpu

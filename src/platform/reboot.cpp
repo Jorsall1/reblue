@@ -33,6 +33,17 @@
 #include <vector>
 #endif
 
+#if defined(__SWITCH__) && defined(__SWITCH2__)
+#include <rex/ui/switch2_exit.h>
+// libnx/libounce runtime (argv.c): argv[0] is the NRO path hbloader started.
+extern "C" int __system_argc;
+extern "C" char **__system_argv;
+REXCVAR_DEFINE_BOOL(bd_switch2_relaunch, true, "Switch",
+                    "Switch 2: a setting that needs a restart (text language) "
+                    "starts re:Blue again through kaiHEN's loader. false = quit "
+                    "to hbmenu instead (the old behaviour)");
+#endif
+
 namespace bd::platform {
 namespace {
 
@@ -267,7 +278,23 @@ bool RelaunchSelf(bool repair) {
   if (quiesce)
     quiesce();
 
-#if defined(__SWITCH__)
+#if defined(__SWITCH__) && defined(__SWITCH2__)
+  // 3. Switch 2 (kaiHEN): the loader runs this NRO again instead of hbmenu
+  //    (envSetNextLoad, in the same exit as the title's quit). Before this a
+  //    language change quit to hbmenu, which read as a hang after the
+  //    "restart?" prompt (logs 003, 008).
+  if (REXCVAR_GET(bd_switch2_relaunch) && __system_argc > 0 && __system_argv &&
+      __system_argv[0] && __system_argv[0][0]) {
+    const std::string self = __system_argv[0];
+    const std::string args = "\"" + self + "\"";
+    RexSwitch2SetRelaunch(self.c_str(), args.c_str());
+    BD_WARN("[reboot] Switch 2: relaunching {} through the loader", self);
+  } else {
+    BD_WARN("[reboot] Switch 2: exiting to hbmenu instead of relaunching");
+  }
+  rex::FlushLogging();
+  bd::TerminateProcessNow(0);
+#elif defined(__SWITCH__)
   // 3. No relaunch on the console (SpawnProcess): settings are saved, the
   //    renderer released, so quit and the user starts re:Blue again.
   BD_WARN("[reboot] Switch: exiting instead of relaunching");

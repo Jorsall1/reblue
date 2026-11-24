@@ -1,0 +1,67 @@
+SESSION 002 (2026-11-23): OunceVK 20261123 build, invariant audit, Switch 2 cores, 60 fps + dynres/FSR defaults
+All new code is under __SWITCH2__ / REX_PLATFORM_SWITCH2; the Switch 1 paths are unchanged (not rebuilt: Docker build
+not run this session).
+
+OUNCEVK 20261123
+  Installed (dkp-pacman -Q: ouncevk 20261123-1; pacman -Qo libouncevk.a -> ouncevk 20261123-1).
+  BUG FOUND + FIXED (cmake/switch2.cmake): the prefixed copy was regenerated only when libouncevk.a was NEWER than it.
+    dkp-pacman keeps the package's mtime (07:07), older than the 20261120-prefixed copy (12:49), so the step-1 configure
+    kept linking 20261120. Now keyed on the archive's SHA-256 (out/switch2-build/ouncevk/libouncevk_prefixed.sha256);
+    the configure log prints the sha. Rebuilt at 13:49 from sha ab30efc8...3da81 (20261123; 20261120 is f8b49053...).
+  Note: /opt/devkitpro/ounce-devkit-version.txt still says "ouncevk f31c0d894e (OunceVK 20261120 ...)": stale text,
+    not ours, not edited (build-switch2.sh only echoes it).
+
+FILES CHANGED
+  cmake/switch2.cmake                           SHA-256 stamp for the OunceVK prefix step (above)
+  thirdparty/rexglue-sdk/src/core/threading_switch.cpp/.h
+      kRexSwitchMaxCores 8 (Switch 2) / 4; core masks & 0xFF instead of & 0xF (pthread_setaffinity_np, ReadSystemCore);
+      Switch 2: no "system core" (four-core mode off: it stripped core 3 from every multi-core mask and pinned audio to
+      it), g_idle[] sized by kRexSwitchMaxCores. New RexSwitchSpreadCurrentThread(hint): ideal core = hint-th app core,
+      mask = all app cores (not an exclusive pin).
+  thirdparty/rexglue-sdk/src/system/xthread.cpp  Switch 2: each XThread starts with RexSwitchSpreadCurrentThread(its
+      Xbox 360 hardware thread) -> guest HW threads 0-5 start on cores 0-5 of kaiHEN's 0x3F, mask stays whole.
+  src/gpu/pipeline/pso_precache.cpp             Switch 2: pool sized from the process core count (6 -> 3 compiler
+      threads; hardware_concurrency() is 0 on libnx, which gave 2), workers spread over all cores starting at 3-5.
+  src/platform/switch_tuning.h, src/platform/switch/switch_tuning.cpp
+      Switch 2 defaults: bd_switch_dynamic_resolution true, bd_switch_fsr 2 (FSR 1 whenever the scene is smaller than
+      the screen), bd_switch_dynamic_gpu_ms 15.5 (60 fps budget; was 33.3), bd_switch_gpu_mhz 0 (switch_apm.cpp's
+      configs are Switch 1 ones). New cvars bd_switch2_handheld_max_height 1080 / _min_height 576,
+      bd_switch2_docked_max_height 1440 / _min_height 720. Render size in BOTH modes = mode max (or dynres height,
+      clamped to the mode's range); dynres in both modes, 36-line steps (no snap to the ends on Switch 2); dock/undock
+      restarts at the new mode's max and requests a recompute. SwitchProcessCoreCount().
+  thirdparty/rexglue-sdk/src/ui/window_switch.cpp  Switch 2: window/swapchain 1920x1080 in both modes (LO's choice,
+      audit_report.txt 4.2: OunceVK is never asked for a 1440p/2160p extent; 2560x1440 is an offscreen scene target
+      scaled down by the present pass).
+  src/engine/settings.cpp                        Switch 2: bd_fps_limit default 60 (Switch 1/PC stay 0 = unlimited).
+  src/gpu/present.cpp                            Switch 2: with vsync on and a 60 cap the limiter runs at 61 so it
+      never holds a frame vsync would show.
+
+VERIFIED
+  /tmp/kiro/obj.sh: all 20 earlier Switch 2 objects OK. /tmp/kiro/obj3.sh: the 7 files changed here OK, no new warnings.
+  CONFIGURE_ONLY=1 build-switch2.sh: EXIT=0. bash tools/switch2/build-switch2.sh: 528/528, EXIT=0 (/tmp/kiro/build.log).
+  out/switch2/reblue.nro 47,588,247 bytes, sha256 3066470638946B94...519A2C54; copied to C:\Users\Jorda\Desktop\reblue.nro
+  (= /mnt/c/Users/Jorda/Desktop). Shaders are compiled in (shader_cache.cpp); no env.txt exists in this port.
+  ELF (/tmp/kiro/verify.out, callers.out from objdump of reblue.elf):
+    249 ouncevk_vk* T symbols incl. ouncevk_vkGetInstanceProcAddr / vkCreateViSurfaceNN / vkCmdClearAttachments,
+      0 unprefixed vk* functions. (20261120 and 20261123 export the same symbol names: linkage is shown by the sha.)
+    "sdmc:/hbmenu.nro" + the [exit] next-load strings present; envSetNextLoad called only from RexSwitch2Exit;
+      appletLockExit only from RexSwitch2ExitInit; appletUnlockExit from RexSwitch2Exit and CloseForHomeMenu;
+      svcExitProcess only from RexSwitch2CloseForHomeMenu and libnx's _appletExitProcess.
+    No SetCurrentProcess symbol (only the guest's KeSetCurrentProcessType export). No error applet symbols.
+      fsOpenSdCardFileSystem called only by fsdevMountSdmc.
+    No svcMapProcessMemory / svcMapProcessCodeMemory / svcMapPhysicalMemory / svcSetProcessMemoryPermission in the
+      image. svcMapMemory: only libnx threadCreate (stack mapping; LO has the same libnx path).
+    diagAbortWithResult (weak) is still referenced, ONLY from libnx/libounce internals (__appInit, appletInitialize,
+      hid*, virtmemSetup, __libnx_initheap, ...: their own fatal paths). None of our code calls it on Switch 2.
+  Source audit: every Switch-1 __nx_applet_exit_mode = 1 / diagAbortWithResult site is in the #else of a
+    __SWITCH2__ branch that calls RexSwitch2Exit; SaltyNX + sys-clk return before any sm lookup; forwarder NPDM writer
+    returns under __SWITCH2__; TranslatePhysical uses the physical_home_ table (SetPhysicalHome in PhysicalHeap
+    Alloc/AllocFixed/AllocRange); plume_vulkan.cpp has cmdClearAttachmentsChunked (kMaxClearRects 80).
+
+OPEN
+  - Hardware untested: guest-thread spread (svcSetThreadCoreMask with 0x3F; LO uses the same call on Switch 2), the
+    2560x1440 docked scene target, the 15.5 ms budget and FSR cost on the Switch 2 GPU (kFsrExtraMs 1.0 is a guess).
+  - Switch 1 build not re-run (needs the Docker host stage); its code paths are textually unchanged.
+  - Menu: the resolution rows are Switch 1's (bd_switch_handheld_height); the Switch 2 heights are cvars only.
+  - Items from summary_001 still open (cond-wait threads at exit, no write watches, LO's 23e34ffd clear merge).
+  - Tooling: execute_pwsh stops returning WSL output after a while; Start-Job { wsl.exe ... } with a timeout works.

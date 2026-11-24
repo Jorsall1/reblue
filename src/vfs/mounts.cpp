@@ -15,6 +15,7 @@
 
 #include <rex/hash.h>
 
+#include "core/boot_progress.h"
 #include "core/logging.h"
 
 #define MINIZ_HEADER_FILE_ONLY
@@ -445,6 +446,7 @@ void ShippedPackMount::BuildIndex() {
   };
 
   for (u32 archive = 0; archive < archives_.size(); ++archive) {
+    bd::boot_progress::Report(archive, static_cast<unsigned>(archives_.size()));
     ForEachIPKRecord(archives_[archive], [&, archive](
                                              Key key,
                                              const IpkRecord_t &record) {
@@ -570,6 +572,15 @@ void ShippedPackMount::SaveIndex(const std::filesystem::path &path,
   }
 
   std::filesystem::rename(temp, path, ec);
+  if (ec) {
+    // libnx's fsdev rename does not replace an existing file (EEXIST), so a
+    // stale index stayed forever and every boot rescanned all archives (13 s
+    // on Switch 2). Drop the old one and rename again.
+    std::error_code rm_ec;
+    std::filesystem::remove(path, rm_ec);
+    ec.clear();
+    std::filesystem::rename(temp, path, ec);
+  }
   if (ec) {
     BD_WARN("[vfs] pack index not replaced: {}", ec.message());
     std::filesystem::remove(temp, ec);

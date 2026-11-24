@@ -39,6 +39,11 @@
 // layer. The real gaps (mman, ucontext, dlfcn, syscall) are handled with
 // REX_PLATFORM_SWITCH branches inside each file.
 #define REX_PLATFORM_LINUX 1
+// Switch 2 (libounce + OunceVK under kaiHEN, cmake/toolchains/switch2-libounce.cmake):
+// the Switch build plus the kaiHEN rules (no svcMap* syscalls, the loader exit).
+#if defined(__SWITCH2__)
+#define REX_PLATFORM_SWITCH2 1
+#endif
 #elif defined(__ANDROID__)
 #define REX_PLATFORM_ANDROID 1
 #define REX_PLATFORM_LINUX 1
@@ -53,6 +58,9 @@
 // so they can be used in static_assert and regular expressions.
 #ifndef REX_PLATFORM_SWITCH
 #define REX_PLATFORM_SWITCH 0
+#endif
+#ifndef REX_PLATFORM_SWITCH2
+#define REX_PLATFORM_SWITCH2 0
 #endif
 #ifndef REX_PLATFORM_MAC
 #define REX_PLATFORM_MAC 0

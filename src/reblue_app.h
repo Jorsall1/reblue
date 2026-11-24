@@ -22,6 +22,9 @@
 
 #include "installer/installer.h"
 #include "ui/ui.h"
+#if defined(__SWITCH2__)
+#include "ui/perf_hud.h"
+#endif
 
 struct ImFontAtlas;
 
@@ -120,6 +123,11 @@ private:
   // of reading as the one already declined.
   u32 update_prompt_generation_ = 0;
   std::unique_ptr<bd::ui::UpdateStatusOverlay> update_status_;
+#if defined(__SWITCH2__)
+  // bd_switch2_show_fps: made and dropped on the UI thread inside the overlay
+  // draw, following the setting.
+  std::unique_ptr<bd::ui::PerfHudOverlay> perf_hud_;
+#endif
 
 #if defined(_WIN32) && defined(REBLUE_BUILD_INSTALLER)
   std::unique_ptr<bd::installer::UpgradePrompt> upgrade_prompt_;

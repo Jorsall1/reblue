@@ -474,8 +474,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
 
     // kNumFrames + 1: a flip model swapchain needs one back buffer beyond the
     // frames in flight so acquiring N+1 never waits on scanout.
-    plume::RenderSwapChainDesc desc(render_window,
-                                    plume::RenderFormat::B8G8R8A8_UNORM,
+    plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat,
                                     kNumFrames + 1, false, kNumFrames);
     s.swap_chain = s.queue->createSwapChain(desc);
 #if !defined(REBLUE_D3D12)
@@ -582,6 +581,48 @@ void Video::SyncBackBufferSizeLocked() {
   if (bb->width == w && bb->height == h)
     return;
 
+#if defined(__SWITCH2__)
+  // No GPU drain: waiting for both in-flight frames here emptied the queue at
+  // every dynamic resolution step (~20 ms between "engine surfaces rebuilt"
+  // and "back buffer ->" in log 013, then a missed vblank). The old image, its
+  // view and every framebuffer that pairs it go to the recording slot's
+  // graveyard and are freed once that slot's fence has passed, which covers
+  // the open list and the earlier submissions (one queue).
+  const u32 retire = Video::RetireSlot("back buffer");
+  const auto park_fb = [&](std::unique_ptr<plume::RenderFramebuffer> fb) {
+    if (fb)
+      s.framebuffer_graveyard[retire].push_back(std::move(fb));
+  };
+  if (bb->framebufferAttached && bb->texture) {
+    const plume::RenderTexture *old_tex = bb->texture;
+    for (auto it = s.framebuffer_owners.begin();
+         it != s.framebuffer_owners.end();) {
+      GuestTexture *owner = *it;
+      if (owner != bb) {
+        auto found = owner->framebuffers.find(old_tex);
+        if (found != owner->framebuffers.end()) {
+          park_fb(std::move(found->second));
+          owner->framebuffers.erase(found);
+        }
+      }
+      if (owner == bb || owner->framebuffers.empty())
+        it = s.framebuffer_owners.erase(it);
+      else
+        ++it;
+    }
+    bb->framebufferAttached = false;
+  }
+  for (auto &entry : bb->framebuffers)
+    park_fb(std::move(entry.second));
+  bb->framebuffers.clear();
+  if (bb->textureView)
+    s.texture_view_graveyard[retire].push_back(std::move(bb->textureView));
+  if (bb->textureHolder)
+    s.texture_graveyard[retire].push_back(std::move(bb->textureHolder));
+  bb->texture = nullptr;
+  // The open list may still sit inside a render pass on the old framebuffer.
+  s.draw_framebuffer_bound = false;
+#else
   SubmitOpenListLocked(s);
   for (u32 i = 0; i < kNumFrames; ++i) {
     if (s.command_list_submitted[i]) {
@@ -589,7 +630,28 @@ void Video::SyncBackBufferSizeLocked() {
       s.command_list_submitted[i] = false;
     }
   }
+#endif
 
+  // Framebuffers pairing the old back buffer with a depth surface live in that
+  // surface's cache, keyed by the old texture's address. CreateBackBufferTexture
+  // only clears the back buffer's own cache, so those stayed: once the new
+  // texture got the old one's address (each dynamic resolution change), a draw
+  // found a framebuffer of the destroyed image at the old size.
+  if (bb->framebufferAttached && bb->texture) {
+    const plume::RenderTexture *old_tex = bb->texture;
+    for (auto it = s.framebuffer_owners.begin();
+         it != s.framebuffer_owners.end();) {
+      GuestTexture *owner = *it;
+      if (owner != bb)
+        owner->framebuffers.erase(old_tex);
+      if (owner == bb || owner->framebuffers.empty())
+        it = s.framebuffer_owners.erase(it);
+      else
+        ++it;
+    }
+    bb->framebufferAttached = false;
+  }
+  s.draw_framebuffer_bound = false;
   if (!CreateBackBufferTexture(s, bb, w, h)) {
     BD_ERROR("Back-buffer resize to {}x{} failed", w, h);
     return;
@@ -891,6 +953,85 @@ void NoteCreation(CreationCounter &c, std::chrono::steady_clock::time_point sinc
 }
 } // namespace
 
+#if defined(__SWITCH__)
+namespace {
+// [textures] churn report: host textures created per (tag, size, format) over
+// 10 s windows, logged when a window created 100 or more (a scene that creates
+// textures every frame: the post-movie stretch of the 2026-11-24 log made 14 a
+// frame with 32 ms of CPU a frame). Top 6 keys.
+struct ChurnKey {
+  const char *tag;
+  u32 w, h, fmt, flags;
+  bool operator==(const ChurnKey &o) const {
+    return tag == o.tag && w == o.w && h == o.h && fmt == o.fmt && flags == o.flags;
+  }
+};
+struct ChurnEntry {
+  ChurnKey key;
+  u64 count = 0, us = 0;
+};
+std::mutex g_churn_mutex;
+std::vector<ChurnEntry> g_churn;
+u64 g_churn_total = 0;
+std::chrono::steady_clock::time_point g_churn_start{};
+u32 g_churn_logged = 0;
+
+void NoteTextureChurn(const char *tag, const plume::RenderTextureDesc &desc, u64 us) {
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard lock(g_churn_mutex);
+  if (g_churn_start == std::chrono::steady_clock::time_point{})
+    g_churn_start = now;
+  const ChurnKey key{tag ? tag : "?", desc.width, desc.height, u32(desc.format),
+                     u32(desc.flags)};
+  auto it = std::find_if(g_churn.begin(), g_churn.end(),
+                         [&](const ChurnEntry &e) { return e.key == key; });
+  if (it == g_churn.end()) {
+    if (g_churn.size() < 256) {
+      g_churn.push_back({key});
+      it = g_churn.end() - 1;
+    }
+  }
+  if (it != g_churn.end()) {
+    ++it->count;
+    it->us += us;
+  }
+  ++g_churn_total;
+  if (now - g_churn_start < std::chrono::seconds(10))
+    return;
+  const double secs =
+      std::chrono::duration<double>(now - g_churn_start).count();
+  if (g_churn_total >= 100 && g_churn_logged < 60) {
+    ++g_churn_logged;
+    std::sort(g_churn.begin(), g_churn.end(),
+              [](const ChurnEntry &a, const ChurnEntry &b) { return a.count > b.count; });
+    std::string top;
+    for (size_t i = 0; i < g_churn.size() && i < 6; ++i) {
+      const auto &e = g_churn[i];
+      top += std::format("{}{} {}x{} fmt {} flags {:#x}: {} ({:.1f} ms)", i ? ", " : "",
+                         e.key.tag, e.key.w, e.key.h, e.key.fmt, e.key.flags, e.count,
+                         double(e.us) / 1e3);
+    }
+    BD_INFO("[textures] {} created in {:.1f} s ({:.1f} a second) | top: {}", g_churn_total,
+            secs, double(g_churn_total) / secs, top);
+  }
+  g_churn.clear();
+  g_churn_total = 0;
+  g_churn_start = now;
+}
+} // namespace
+#endif
+
+std::unique_ptr<plume::RenderFramebuffer>
+CreateHostFramebuffer(plume::RenderDevice *device,
+                      const plume::RenderFramebufferDesc &desc) {
+  if (!device)
+    return nullptr;
+  const auto created_at = std::chrono::steady_clock::now();
+  auto fb = device->createFramebuffer(desc);
+  NoteCreation(g_creations.framebuffers, created_at);
+  return fb;
+}
+
 std::unique_ptr<plume::RenderTexture>
 CreateHostTexture(plume::RenderDevice *device,
                   const plume::RenderTextureDesc &desc, const char *tag) {
@@ -901,6 +1042,12 @@ CreateHostTexture(plume::RenderDevice *device,
   const auto created_at = std::chrono::steady_clock::now();
   auto texture = device->createTexture(desc);
   NoteCreation(g_creations.textures, created_at);
+#if defined(__SWITCH__)
+  NoteTextureChurn(tag, desc,
+                   u64(std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - created_at)
+                           .count()));
+#endif
   if (!texture
 #if defined(REBLUE_D3D12)
       || static_cast<plume::D3D12Texture *>(texture.get())->d3d == nullptr

@@ -25,7 +25,10 @@
 #endif
 #if defined(__SWITCH__)
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <memory>
+#include <mutex>
 #include "guest_memory_switch.h"
 #endif
 
@@ -226,6 +229,72 @@ bool CreateEmptyFile(const std::filesystem::path& path) {
   return false;
 }
 
+#if defined(__SWITCH__)
+namespace {
+// RecentSdReads' ring (rex/filesystem.h). A lock per read of 64 KB or more:
+// those take milliseconds on the SD, the lock well under a microsecond.
+struct SdReadNote {
+  uint64_t end_ns = 0;
+  uint64_t ns = 0;
+  uint64_t bytes = 0;
+  char name[64] = {};
+};
+constexpr size_t kSdReadNotes = 64;
+constexpr size_t kSdReadNoteMinBytes = 64 * 1024;
+std::mutex g_sd_notes_mutex;
+SdReadNote g_sd_notes[kSdReadNotes];
+size_t g_sd_notes_next = 0;
+
+uint64_t SteadyNs() {
+  return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count());
+}
+
+void NoteSdRead(const std::filesystem::path& path, size_t bytes, uint64_t start_ns) {
+  if (bytes < kSdReadNoteMinBytes)
+    return;
+  const uint64_t end_ns = SteadyNs();
+  // The last two components ("pack/xx.ipk"): enough to tell the files apart.
+  std::string name = path.filename().string();
+  if (path.has_parent_path() && path.parent_path().has_filename())
+    name = path.parent_path().filename().string() + "/" + name;
+  std::lock_guard lock(g_sd_notes_mutex);
+  SdReadNote& n = g_sd_notes[g_sd_notes_next];
+  g_sd_notes_next = (g_sd_notes_next + 1) % kSdReadNotes;
+  n.end_ns = end_ns;
+  n.ns = end_ns - start_ns;
+  n.bytes = bytes;
+  std::snprintf(n.name, sizeof(n.name), "%s", name.c_str());
+}
+}  // namespace
+
+std::vector<SdReadByFile> RecentSdReads(uint64_t since_ns, size_t max_files) {
+  std::vector<SdReadByFile> out;
+  {
+    std::lock_guard lock(g_sd_notes_mutex);
+    for (const SdReadNote& n : g_sd_notes) {
+      if (!n.end_ns || n.end_ns < since_ns)
+        continue;
+      auto it = std::find_if(out.begin(), out.end(),
+                             [&](const SdReadByFile& f) { return f.name == n.name; });
+      if (it == out.end()) {
+        out.push_back({n.name, 0, 0, 0});
+        it = out.end() - 1;
+      }
+      it->bytes += n.bytes;
+      it->ns += n.ns;
+      ++it->reads;
+    }
+  }
+  std::sort(out.begin(), out.end(),
+            [](const SdReadByFile& a, const SdReadByFile& b) { return a.bytes > b.bytes; });
+  if (out.size() > max_files)
+    out.resize(max_files);
+  return out;
+}
+#endif
+
 class PosixFileHandle : public FileHandle {
  public:
   PosixFileHandle(std::filesystem::path path, int handle)
@@ -237,6 +306,16 @@ class PosixFileHandle : public FileHandle {
   bool Read(size_t file_offset, void* buffer, size_t buffer_length,
             size_t* out_bytes_read) override {
 #if defined(__SWITCH__)
+    const uint64_t start_ns = SteadyNs();
+    const bool ok = ReadUnnoted(file_offset, buffer, buffer_length, out_bytes_read);
+    if (ok)
+      NoteSdRead(path_, *out_bytes_read, start_ns);
+    return ok;
+  }
+
+ private:
+  bool ReadUnnoted(size_t file_offset, void* buffer, size_t buffer_length,
+                   size_t* out_bytes_read) {
     /*
      * Reads into guest memory go through a heap buffer of our own. The guest window is process memory
      * mapped from code memory, which FS refuses as an IPC buffer (0xD401), and libnx then falls back to
@@ -282,6 +361,8 @@ class PosixFileHandle : public FileHandle {
     *out_bytes_read = static_cast<size_t>(out);
     return true;
   }
+
+ public:
   bool Write(size_t file_offset, const void* buffer, size_t buffer_length,
              size_t* out_bytes_written) override {
     ssize_t out = pwrite(handle_, buffer, buffer_length, file_offset);

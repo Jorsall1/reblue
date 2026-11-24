@@ -35,6 +35,22 @@
 
 #include <rex/cvar.h>
 
+/*
+ * How many cores the shim considers. Switch 1: four (an application gets 0-2,
+ * core 3 is the system's unless a forwarder NPDM grants it). Switch 2: eight
+ * Cortex-A78C cores; under kaiHEN the donor game's process gets 0x3F (cores
+ * 0-5, LostOdysseyRecomp os/switch_platform.h ProcessCoreMask, gpu/host_cores.h),
+ * and none of them is a "system core" in the Switch 1 sense: the four-core
+ * mode below (strip the top core from every multi-core mask, pin background
+ * threads there) would take core 3 away from the game for nothing.
+ */
+#if defined(__SWITCH2__)
+constexpr int kRexSwitchMaxCores = 8;
+#else
+constexpr int kRexSwitchMaxCores = 4;
+#endif
+constexpr u32 kRexSwitchCoreBits = (1u << kRexSwitchMaxCores) - 1;
+
 // re:Blue (2026-11-12): four-core mode, from renut-nx / banjo-nx (NetherSX2_nx's, MIT, NaGaa95). See threading_switch.h.
 REXCVAR_DEFINE_INT32(switch_system_core, 1, "Kernel",
                      "Switch: when the process is granted all four cores (a forwarder whose NPDM allows CPU 0-3): "
@@ -150,17 +166,18 @@ int pthread_setaffinity_np(pthread_t thread, size_t size, const cpu_set_t* set) 
    * POSIX API being imitated asks for.
    */
   s32 preferido = -1;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < kRexSwitchMaxCores; i++) {
     if (set->bits & (1ull << i)) { preferido = i; break; }
   }
   if (preferido < 0)
     return EINVAL;  /* mascara vacia: POSIX tampoco lo permite */
 
   /*
-   * Only 4 cores exist. Asking for more is not a caller error (the SDK
+   * Only 4 cores exist on Switch 1 (8 on Switch 2, of which kaiHEN's donor
+   * process gets 0x3F). Asking for more is not a caller error (the SDK
    * passes 64-bit masks), so it is trimmed silently.
    */
-  const u32 mascara = static_cast<u32>(set->bits & 0xF);
+  const u32 mascara = static_cast<u32>(set->bits & kRexSwitchCoreBits);
 
   if (R_FAILED(svcSetThreadCoreMask(h, preferido, mascara)))
     return EPERM;
@@ -388,9 +405,18 @@ std::mutex g_sys_mutex;
 void ReadSystemCore(bool with_cvar) {
   u64 mask = 0;
   if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) || mask == 0) mask = 0x7;
-  mask &= 0xF;
+  mask &= kRexSwitchCoreBits;
+#if defined(__SWITCH2__)
+  // Every core the process is granted is an application core: no system core,
+  // nothing stripped, threads keep the whole mask libnx's pthread_create gives
+  // them and the kernel balances them over all of it (0x3F under kaiHEN).
+  (void)with_cvar;
+  const int top = -1;
+  const int mode = 0;
+#else
   const int top = __builtin_popcountll(mask) >= 4 ? 63 - __builtin_clzll(mask) : -1;
   const int mode = top < 0 ? 0 : (with_cvar ? int(REXCVAR_GET(switch_system_core)) : 1);
+#endif
   g_process_mask.store(unsigned(mask), std::memory_order_relaxed);
   g_system_mode.store(mode, std::memory_order_relaxed);
   g_system_core.store(mode >= 1 ? top : -1, std::memory_order_relaxed);
@@ -411,7 +437,7 @@ std::string g_npdm_status = "not checked";
 struct IdleSample {
   std::atomic<u64> idle{0}, at{0};
 };
-IdleSample g_idle[4];
+IdleSample g_idle[kRexSwitchMaxCores];
 }  // namespace
 
 Result __real_svcSetThreadCoreMask(Handle handle, s32 preferred_core, u32 affinity_mask);
@@ -463,6 +489,21 @@ unsigned RexSwitchAppCoreMask(void) {
   return g_process_mask.load(std::memory_order_relaxed) & ~g_strip_mask.load(std::memory_order_relaxed);
 }
 
+bool RexSwitchSpreadCurrentThread(int hint) {
+  const u32 mask = RexSwitchAppCoreMask();
+  const int count = __builtin_popcount(mask);
+  if (count == 0) return false;
+  // The hint-th core of the mask (wrapping), so Xbox 360 hardware threads 0-5
+  // land on cores 0-5 of a 0x3F process. Only the ideal core: the mask stays
+  // whole and the kernel may still move the thread (no starvation).
+  int nth = hint < 0 ? 0 : hint % count;
+  int core = 0;
+  for (; core < kRexSwitchMaxCores; ++core) {
+    if ((mask & (1u << core)) && nth-- == 0) break;
+  }
+  return R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, mask));
+}
+
 bool RexSwitchMoveCurrentThreadToSystemCore(int priority) {
   const int core = RexSwitchSystemCore();
   if (core < 0) return false;
@@ -477,7 +518,7 @@ void RexSwitchSampleCoreIdle(void) {
   if (now - last_try.load(std::memory_order_relaxed) < armNsToTicks(100000000ull)) return;  // 100 ms
   last_try.store(now, std::memory_order_relaxed);
   const int core = int(svcGetCurrentProcessorNumber());
-  if (core < 0 || core >= 4) return;
+  if (core < 0 || core >= kRexSwitchMaxCores) return;
   IdleSample& s = g_idle[core];
   u64 idle = 0;
   if (R_FAILED(svcGetInfo(&idle, InfoType_IdleTickCount, INVALID_HANDLE, u64(core)))) return;
@@ -507,6 +548,12 @@ static bool SphairaForwarderOfThisNro(u64 program) {
 }
 
 int RexSwitchEnsureForwarderNpdm(void) {
+#if defined(__SWITCH2__)
+  // kaiHEN runs the NRO in a donor game's process: there is no forwarder, and
+  // nothing may be written under that title's atmosphere/contents folder.
+  g_npdm_status = "off (Switch 2 / kaiHEN: no forwarders)";
+  return 0;
+#endif
   const std::string want_text = REXCVAR_GET(switch_forwarder_program_id);
   if (want_text == "off") {
     g_npdm_status = "off (switch_forwarder_program_id = \"off\")";
@@ -587,7 +634,7 @@ void RexSwitchSystemCoreDescribe(char* out, size_t out_len) {
 }
 
 bool RexSwitchCoreIdleSample(int core, unsigned long long* idle_ticks, unsigned long long* at_ticks) {
-  if (core < 0 || core >= 4) return false;
+  if (core < 0 || core >= kRexSwitchMaxCores) return false;
   const IdleSample& s = g_idle[core];
   const u64 at = s.at.load(std::memory_order_acquire);
   if (at == 0) return false;

@@ -186,7 +186,15 @@ bool Memory::Initialize() {
   }
 #endif
   virtual_membase_ = mapping_base_;
+#if REX_PLATFORM_SWITCH2
+  // Backend::Heap holds only the 4 GiB guest window (core/guest_memory_switch2.cpp):
+  // there is no raw physical view at +0x100000000. Physical memory is reached
+  // through the A view, and TranslatePhysical sends C and E pages to their own
+  // view (physical_home_).
+  physical_membase_ = mapping_base_ + 0xA0000000ull;
+#else
   physical_membase_ = mapping_base_ + 0x100000000ull;
+#endif
 
   REXSYS_INFO("Guest memory arena mapped: virtual base 0x{:016X}, physical base 0x{:016X}",
               reinterpret_cast<uintptr_t>(virtual_membase_),
@@ -388,6 +396,13 @@ int Memory::MapViews(uint8_t* mapping_base) {
   // side if system allocation granularity is bigger than 4 KB.
   uint64_t granularity_mask = ~uint64_t(system_allocation_granularity_ - 1);
   for (size_t n = 0; n < rex::countof(map_info); n++) {
+#if REX_PLATFORM_SWITCH2
+    // The raw physical view lies past the 4 GiB heap block: use the A view.
+    if (map_info[n].virtual_address_start >= 0x100000000ull) {
+      views_.all_views[n] = mapping_base + 0xA0000000ull;
+      continue;
+    }
+#endif
     views_.all_views[n] = reinterpret_cast<uint8_t*>(rex::memory::MapFileView(
         mapping_, mapping_base + map_info[n].virtual_address_start,
         map_info[n].virtual_address_end - map_info[n].virtual_address_start + 1,
@@ -485,6 +500,18 @@ uint32_t Memory::GetPhysicalAddress(uint32_t address) const {
   }
   return static_cast<const PhysicalHeap*>(heap)->GetPhysicalAddress(address);
 }
+
+#if REX_PLATFORM_SWITCH2
+void Memory::SetPhysicalHome(uint32_t physical_address, uint32_t size, uint32_t heap_base) {
+  const uint8_t home = heap_base >= 0xE0000000u ? 2 : heap_base >= 0xC0000000u ? 1 : 0;
+  const uint64_t first = (physical_address & 0x1FFFFFFFu) >> 12;
+  const uint64_t last = std::min<uint64_t>((uint64_t(physical_address & 0x1FFFFFFFu) + size + 0xFFF) >> 12,
+                                           sizeof(physical_home_));
+  for (uint64_t page = first; page < last; ++page) {
+    physical_home_[page] = home;
+  }
+}
+#endif
 
 void Memory::Zero(uint32_t address, uint32_t size) {
   std::memset(TranslateVirtual(address), 0, size);
@@ -1979,6 +2006,9 @@ bool PhysicalHeap::Alloc(uint32_t size, uint32_t alignment, uint32_t allocation_
     // TODO(benvanik): don't leak parent memory.
     return false;
   }
+#if REX_PLATFORM_SWITCH2
+  memory_->SetPhysicalHome(parent_address, size, heap_base_);
+#endif
   *out_address = address;
   return true;
 }
@@ -2012,6 +2042,9 @@ bool PhysicalHeap::AllocFixed(uint32_t base_address, uint32_t size, uint32_t ali
     // TODO(benvanik): don't leak parent memory.
     return false;
   }
+#if REX_PLATFORM_SWITCH2
+  memory_->SetPhysicalHome(parent_base_address, size, heap_base_);
+#endif
 
   return true;
 }
@@ -2050,6 +2083,9 @@ bool PhysicalHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint3
     // TODO(benvanik): don't leak parent memory.
     return false;
   }
+#if REX_PLATFORM_SWITCH2
+  memory_->SetPhysicalHome(parent_address, size, heap_base_);
+#endif
   *out_address = address;
   return true;
 }

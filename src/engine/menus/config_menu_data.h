@@ -50,6 +50,9 @@ size_t LanguageCount();
 std::string LanguageName(int index);
 std::string LanguageKinds(int index);
 std::string LanguageSize(int index);
+// Bumped each time a language's size on disk becomes known (Switch 2 sizes
+// them on a worker; 0 elsewhere), so an open detail panel can refresh.
+u32 LanguageSizesGeneration();
 bool LanguageRemovable(int index);
 
 enum class LanguageAddResult { Canceled, Missing, NothingNew, Failed, Picked };

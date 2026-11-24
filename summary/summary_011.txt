@@ -1,0 +1,31 @@
+SESSION 011 (2026-11-23): second silent death after a movie; dynamic resolution held during movies
+LOGS (Desktop\bluedragon\logs, reblue_005.log, rex\)
+  rex_session.txt "running", no rex_crash.log: a silent kill again. rex_cuelgue.log is the 6 s no-frame stall
+  at boot (0 frames presented, tick ~159 s before the end): harmless.
+  Got further than session 010: ev401 played and stopped (19:53:54.2), the next movie (ev001+ev002+ev003+ev004)
+  started 0.35 s later, and the process died ~1 s into it (last line 19:53:55.06). Last snapshot (rex_ultimo_b,
+  #99, 30 fps): every thread idle (main in RunMainMessageLoop wait, game thread in PaceFrame). Nothing in flight
+  on the CPU side: GPU or system fault, as in 010.
+  Session 010's stale-size fix worked: every change logged "(the old size: given the new one)", no
+  "[framebuffer] depth ... smaller" warning.
+  Pattern over logs 002-005: the height only ever went UP during movies (a movie costs ~10 ms GPU against
+  15-17 in the field): log 004 612->648 during ev401, log 005 648->720 and 720->792 during ev401. Both deaths
+  came within 1-8 s of such a movie. The field had 12-13 step-downs per session with no death. Cause not proven:
+  either a resize under the movie's draws or step-ups in general (a buffer not rebuilt being outgrown).
+CHANGED
+  src/platform/switch_tuning.h: SwitchNoteMovieFrame() (inline no-op off Switch).
+  src/platform/switch/switch_tuning.cpp: g_last_movie_frame_ns + SwitchNoteMovieFrame; in
+    SwitchDynamicResolutionFrame (__SWITCH2__ only) no change while a movie frame was copied in the last 3 s;
+    the field's GPU average is not fed movie frames, the 4 s gap starts after the hold.
+    New lines: "[dynres] held at height N while a movie plays", "[dynres] movie over: height N, ...".
+  src/engine/movie/native_movie.cpp: the sub_826FEDB8 hook (the game copying a movie frame) calls
+    SwitchNoteMovieFrame (runs for native and guest-decoded movies).
+VERIFIED
+  build-switch2.sh Done (out/build_011.log, 0 warnings/errors). reblue.nro 47,616,919 bytes, sha256
+  f098de04...9b5cc1a5 in out/switch2 and Desktop (equal). Not copied to the SD folder. Not run on hardware.
+OPEN
+  - Hardware: play through ev401 + ev001..ev004 again; expect "held" / "movie over" lines and no change inside.
+    If it still dies, the movie path itself (not dynres) is next; if it dies at a later field step UP, the
+    step-up mechanism is (a quick test: bd_switch_dynamic_resolution off).
+  - Fixed max-size targets with a sub-rectangle (removes rebuilds entirely) still not started.
+  - Session 009 open items (mutexLock svcBreak) unchanged.

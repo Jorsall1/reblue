@@ -57,6 +57,7 @@
 #include "rex/ui/switch_apm.h"
 #include "rex/ui/switch_saltynx.h"
 #include "rex/ui/switch_sysclk.h"
+#include "rex/ui/switch2_exit.h"
 
 // libnx's sbrk bounds: the malloc heap. Declared here, at file scope: inside the anonymous namespace GCC
 // gives them that namespace (the link looks for (anonymous namespace)::fake_heap_start).
@@ -127,7 +128,12 @@ constexpr u64 kReportSeconds = 10;
 constexpr u64 kStartDelayNs = 8000000000ULL;
 constexpr size_t kMaxSamples = 1 << 15;
 constexpr size_t kFrames = 10;
+#if defined(__SWITCH2__)
+// 33 audout buffers appended after the device ran dry, 34 their silence (us).
+constexpr unsigned kCounterCount = 35;
+#else
 constexpr unsigned kCounterCount = 33;
+#endif
 // In <NRO folder>/logs/rex/ (switch_crash_hooks.c computes it at startup).
 std::string ReportPath() {
   return std::string(RexSwitchLogDir()) + "rex_perfil.log";
@@ -482,6 +488,11 @@ void ReportImpl(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCoun
                rex::ui::switch_saltynx::ModoBase(appletGetOperationMode() == AppletOperationMode_Console)
                    ? "sobremesa"
                    : "portatil");
+#if defined(__SWITCH2__)
+  // re:Blue session 013: audout appended after the device had run dry (an audible gap each).
+  std::fprintf(f, "     audio salida: %.0f huecos del dispositivo, %.1f ms de silencio\n", delta(33),
+               delta(34) / 1000.0);
+#endif
   // Reverse-NX state as is, without interpretation. A whole test session was wasted because its
   // overlay said "Docked" while "Controlled by system" was Yes, and in that case its mode does not
   // rule: it only mirrors the console's. This shows at a glance which of the two is happening.
@@ -543,7 +554,14 @@ void ReportImpl(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCoun
     static TsSession ts_soc{}, ts_placa{};
     if (!ts_iniciado) {
       ts_iniciado = true;
+#if defined(__SWITCH2__)
+      // kaiHEN: no sm lookup the Lost Odyssey port has not proven on Switch 2
+      // (an unregistered name blocks, and sm sessions are libounce overrides).
+      // The temperatures read 0.
+      if (false) {
+#else
       if (R_SUCCEEDED(tsInitialize())) {
+#endif
         hay_ts = R_SUCCEEDED(tsOpenSession(&ts_soc, TsDeviceCode_LocationExternal)) &&
                  R_SUCCEEDED(tsOpenSession(&ts_placa, TsDeviceCode_LocationInternal));
       }
@@ -1322,9 +1340,17 @@ Result __wrap_bqDequeueBuffer(Binder* b, bool async, u32 width, u32 height, s32 
 }
 
 void __wrap_svcSleepThread(s64 nano) {
+#if defined(__SWITCH2__)
+  // kaiHEN exit (switch2_exit.cpp, rule 5): every thread but the one running
+  // the exit ends at its next sleep, so the loader has little left to park.
+  if (RexSwitch2ShouldEndThisThread()) RexSwitch2EndThreadForExit();
+#endif
   const u64 desde = armGetSystemTick();
   __real_svcSleepThread(nano);
   Anotar(nano == 0 ? kSleep0 : nano < 0 ? kSleepCeder : nano <= 1000000 ? kSleepCorto : kSleepLargo, desde);
+#if defined(__SWITCH2__)
+  if (RexSwitch2ShouldEndThisThread()) RexSwitch2EndThreadForExit();
+#endif
 }
 
 /*

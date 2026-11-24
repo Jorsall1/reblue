@@ -1,0 +1,194 @@
+diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
+index 4959452..f88ac7e 100644
+--- a/plume_vulkan.cpp
++++ b/plume_vulkan.cpp
+@@ -22,6 +22,7 @@
+ #include "plume_vulkan.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cmath>
+ #include <climits>
+ #include <unordered_map>
+@@ -35,7 +36,17 @@
+ #   include <SDL3/SDL_init.h>
+ #endif
+ 
+-#if defined(__SWITCH__)
++#if defined(__SWITCH2__)
++// Switch 2: OunceVK (libouncevk.a) is linked statically with its vk* entry
++// points renamed to ouncevk_vk* (cmake/PrefixOunceVK.cmake), because volk's
++// function-pointer variables of the same names would otherwise satisfy every
++// reference and the driver would never be pulled into the link. OunceVK has no
++// ICD interface; volk is initialised from its vkGetInstanceProcAddr.
++#include <switch.h>
++extern "C" {
++    VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ouncevk_vkGetInstanceProcAddr(VkInstance instance, const char *pName);
++}
++#elif defined(__SWITCH__)
+ // Mesa NVK is linked statically (no Vulkan loader on Horizon): resolve the
+ // entry points through its ICD interface. Same as UnleashedRecomp-NX.
+ #include <switch.h>
+@@ -898,6 +909,15 @@ namespace plume {
+         pipelineCachePath = path;
+     }
+ 
++#if defined(__SWITCH2__)
++    // The wanted swapchain size, width << 32 | height (0: the window's own).
++    static std::atomic<uint64_t> switchSwapChainSize{0};
++
++    void VulkanSetSwapChainSize(uint32_t width, uint32_t height) {
++        switchSwapChainSize.store((uint64_t(width) << 32) | height, std::memory_order_release);
++    }
++#endif
++
+     struct VulkanDevice::PipelineCacheSaver {
+         VulkanDevice *device = nullptr;
+         std::string path;
+@@ -2479,6 +2499,36 @@ namespace plume {
+     }
+ 
+     bool VulkanSwapChain::resize() {
++#if defined(__SWITCH__) && defined(__SWITCH2__)
++        // reblue (Switch 2): the libnx window reports 1280x720 until it is given
++        // a size, and nwindowSetDimensions only works while no buffer is
++        // registered, so the old swapchain goes first (LostOdysseyRecomp sets
++        // the same sizes through SDL before its swapchain exists,
++        // hbmenu_1440p_fix.txt).
++        if (desc.renderWindow != nullptr) {
++            const uint64_t wanted = switchSwapChainSize.load(std::memory_order_acquire);
++            const uint32_t wantedWidth = uint32_t(wanted >> 32), wantedHeight = uint32_t(wanted);
++            u32 nativeWidth = 0, nativeHeight = 0;
++            nwindowGetDimensions(desc.renderWindow, &nativeWidth, &nativeHeight);
++            if (wantedWidth && wantedHeight && (nativeWidth != wantedWidth || nativeHeight != wantedHeight)) {
++                releaseImageViews();
++                if (vk != VK_NULL_HANDLE) {
++                    vkDestroySwapchainKHR(commandQueue->device->vk, vk, nullptr);
++                    vk = VK_NULL_HANDLE;
++                }
++                Result rc = nwindowSetDimensions(desc.renderWindow, wantedWidth, wantedHeight);
++                if (R_FAILED(rc) && wantedHeight > 1080) {
++                    fprintf(stderr, "[plume] the display refused %ux%u (0x%x), using 1920x1080\n", wantedWidth, wantedHeight, unsigned(rc));
++                    VulkanSetSwapChainSize(1920, 1080);
++                    rc = nwindowSetDimensions(desc.renderWindow, 1920, 1080);
++                }
++                if (R_FAILED(rc)) {
++                    fprintf(stderr, "[plume] nwindowSetDimensions failed (0x%x), keeping %ux%u\n", unsigned(rc), nativeWidth, nativeHeight);
++                    VulkanSetSwapChainSize(nativeWidth, nativeHeight);
++                }
++            }
++        }
++#endif
+         getWindowSize(width, height);
+ 
+         // Don't recreate the swap chain at all if the window doesn't have a valid size.
+@@ -2643,6 +2693,15 @@ namespace plume {
+         if (desc.renderWindow != nullptr && R_SUCCEEDED(nwindowGetDimensions(desc.renderWindow, &nativeWidth, &nativeHeight))) {
+             dstWidth = nativeWidth;
+             dstHeight = nativeHeight;
++#   if defined(__SWITCH2__)
++            // A wanted size the window does not have yet: needsResize() sees the
++            // difference and resize() applies it.
++            const uint64_t wanted = switchSwapChainSize.load(std::memory_order_acquire);
++            if (uint32_t(wanted >> 32) && uint32_t(wanted)) {
++                dstWidth = uint32_t(wanted >> 32);
++                dstHeight = uint32_t(wanted);
++            }
++#   endif
+         }
+         else {
+             dstWidth = 1280;
+@@ -3338,6 +3397,27 @@ namespace plume {
+         }
+     }
+ 
++    // vkCmdClearAttachments in calls of at most 80 rectangles on Switch 2
++    // (ouncevk#2, still open in OunceVK 20261123). Mesa NVK's emit_clear_rects
++    // (nvk_cmd_clear.c) writes 6 command words per rectangle into one push it
++    // never splits, and its command memory comes in 64 KiB blocks
++    // (NVK_CMD_MEM_SIZE, 16384 words): above 2730 rectangles the push runs
++    // into the next command buffer's commands and the GPU stops with a PBDMA
++    // error (VK_ERROR_DEVICE_LOST). Xbox 360 EDRAM tile-split clears reach
++    // thousands of rectangles. 80 * 6 = 480 words fits NVK_CMD_BUFFER_MAX_PUSH
++    // (512). Same limit as LostOdysseyRecomp (gpu/renderer.cpp, commit 65d6b70a).
++    static void cmdClearAttachmentsChunked(VkCommandBuffer commandBuffer, const VkClearAttachment &attachment, const std::vector<VkClearRect> &rects) {
++#   if defined(__SWITCH2__)
++        constexpr size_t kMaxClearRects = 80;
++        for (size_t first = 0; first < rects.size(); first += kMaxClearRects) {
++            const size_t count = std::min(kMaxClearRects, rects.size() - first);
++            vkCmdClearAttachments(commandBuffer, 1, &attachment, uint32_t(count), rects.data() + first);
++        }
++#   else
++        vkCmdClearAttachments(commandBuffer, 1, &attachment, uint32_t(rects.size()), rects.data());
++#   endif
++    }
++
+     void VulkanCommandList::clearColor(uint32_t attachmentIndex, RenderColor colorValue, const RenderRect *clearRects, uint32_t clearRectsCount) {
+         assert(targetFramebuffer != nullptr);
+         assert(attachmentIndex < targetFramebuffer->colorAttachments.size());
+@@ -3356,7 +3436,7 @@ namespace plume {
+         rgba[3] = colorValue.a;
+         attachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+         attachment.colorAttachment = attachmentIndex;
+-        vkCmdClearAttachments(vk, 1, &attachment, uint32_t(rectVector.size()), rectVector.data());
++        cmdClearAttachmentsChunked(vk, attachment, rectVector);
+     }
+ 
+     void VulkanCommandList::clearDepthStencil(bool clearDepth, bool clearStencil, float depthValue, uint32_t stencilValue, const RenderRect *clearRects, uint32_t clearRectsCount) {
+@@ -3379,7 +3459,7 @@ namespace plume {
+             attachment.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+         }
+ 
+-        vkCmdClearAttachments(vk, 1, &attachment, uint32_t(rectVector.size()), rectVector.data());
++        cmdClearAttachmentsChunked(vk, attachment, rectVector);
+     }
+ 
+     void VulkanCommandList::copyBufferRegion(RenderBufferReference dstBuffer, RenderBufferReference srcBuffer, uint64_t size) {
+@@ -4027,10 +4107,12 @@ namespace plume {
+ 
+         // Store properties.
+         vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+-#   if defined(__SWITCH__)
++#   if defined(__SWITCH__) && !defined(__SWITCH2__)
+         // NVK reports a 1 ns timestamp period, as on desktop GPUs, but the Switch
+         // GPU timer runs at 614.4 MHz (625/384 ns per tick). Timings read as 1 ns
+         // ticks come out 1.63x too short.
++        // Not on the Switch 2 (OunceVK): with the correction a 60 fps run read
++        // 22.6 ms of GPU work per frame (135% of wall time), so its ticks are ns.
+         if (physicalDeviceProperties.limits.timestampPeriod == 1.0f) {
+             physicalDeviceProperties.limits.timestampPeriod = 625.0f / 384.0f;
+         }
+@@ -4713,7 +4795,13 @@ namespace plume {
+     // VulkanInterface
+ 
+     VulkanInterface::VulkanInterface() {
+-#   if defined(__SWITCH__)
++#   if defined(__SWITCH2__)
++        // OunceVK, linked statically under the ouncevk_ prefix (see the top of this file).
++        VkResult res = VK_SUCCESS;
++        if (volkGetInstanceVersion() == 0) {
++            volkInitializeCustom(&ouncevk_vkGetInstanceProcAddr);
++        }
++#   elif defined(__SWITCH__)
+         // Mesa NVK is linked statically (no Vulkan loader on Horizon): volk gets
+         // its entry point from the ICD interface instead of a loaded library.
+         VkResult res = VK_SUCCESS;
+diff --git a/plume_vulkan.h b/plume_vulkan.h
+index 3c60f1c..795ddee 100644
+--- a/plume_vulkan.h
++++ b/plume_vulkan.h
+@@ -50,6 +50,14 @@ namespace plume {
+     // device is created; empty (the default) keeps no cache.
+     void VulkanSetPipelineCachePath(const std::string &path);
+ #endif
++#if defined(__SWITCH2__)
++    // reblue (Switch 2): the size the swapchain should have (1920x1080
++    // handheld, 2560x1440 docked). The next resize() gives the libnx window
++    // that size (nwindowSetDimensions, with no swapchain alive); a refused
++    // size above 1080p falls back to 1920x1080. 0 x 0 keeps the window's own
++    // size. Any thread.
++    void VulkanSetSwapChainSize(uint32_t width, uint32_t height);
++#endif
+ 
+     struct VulkanCommandQueue;
+     struct VulkanDevice;

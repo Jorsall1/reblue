@@ -1,0 +1,60 @@
+SESSION 012 (2026-11-24): Settings resolution rows, DOF-time death, language "hang", dynres tuning
+LOGS (Desktop\bluedragon\new log\logs; build f098de04 = session 011 ran 006-008)
+  Kiro state (~/.kiro/sessions): every session is LostOdysseyRecomp, none reblue. Read LO summary_035/037
+  (Settings GPU stop, dynres fixed-share model); nothing there to repeat here.
+  006: silent death (rex_prev_session.log; rex_prev_ultimo_a #790 = 006). The reblue Settings menu opened
+    20:38:30 (mount ui:config-menu) and was never closed (no "task killed"). Under it dynres rebuilt the
+    surfaces 4 times (->648, ->576, ->648, ->720 at 20:40:48, a step UP); death ~20:40:55. Last snapshot:
+    all threads idle, Draw Thread in mutexLock (SetVertexStream/DrawVerticesUP): nothing on the CPU side.
+    Same pattern as 004/005 (step up during a movie, then death). Field step-ups (006 20:40:08, 008
+    11:32:15) and every step-down survived.
+  DOF itself: bd_dof_strength only scales c27.y (tweaks.cpp bdDOFStrengthScaleHook, sqrt). Dumped
+    bd_pe_ps_dof HLSL with XenosRecomp: y = 0 gives CoC 0, the shader's normal in-focus path, no
+    division or bad fetch. So the DOF value is not the fault; the resize under the menu is (not proven).
+  007: Settings 20:43:04-20:43:28, then a 2843 ms GPU fence wait and "Switch: exit requested" (HOME->X);
+    the session ended with a report (008 did not flag it).
+  003, 008: language change -> "restart?" popup -> [reboot] warm reboot -> "exiting instead of
+    relaunching" -> clean exit to hbmenu (008 rex_stderr: next load hbmenu set, 20 threads paused). That
+    quit is the "hang". bd_language is kRequiresRestart (the guest reads its text at boot). 003's three
+    800 ms frames were on the session 010 build; 008 has none.
+  Perf (008 field, handheld): 864 -> 13.7 ms GPU, 936 -> 14.5-15.2 ms, 60.0 fps, worst 17-19 ms. Fixed
+    part ~4.7 ms (start of frame 2.2, shadow map 0.8, present 1.7). Present with FSR 1.7 ms vs 0.9-1.0 at
+    native. 1008 predicted ~16.3 ms: GPU-bound at stock clocks. GPU wait 7-9 ms/frame = vsync pacing with
+    2 frames in flight, not a stall. Clears are full-target (one 2-rect progress bar): LO's clear-rect
+    merge has nothing to merge. Threads already on 0x3F.
+CHANGED
+  src/platform/switch_tuning.h, src/platform/switch/switch_tuning.cpp:
+    - SwitchNoteMenuFrame(): dynres holds while the Settings menu draws and 3 s after ("held ... while the
+      Settings menu is open" / "Settings menu over"), same as the movie hold.
+    - Switch 2: Switch2HeightLimit + Switch2ResolutionHeight / SetSwitch2ResolutionHeight (72-line steps,
+      min <= max kept). Applied limits are a snapshot (g_applied_limits) refreshed only when the controller
+      applies a change 1 s after the menu's last frame ("[dynres] Settings applied: range lo-hi"),
+      restarting at the new maximum. Not applied under the menu (the aspect-ratio Recompute can't leak it).
+    - Budget default 15.5 -> 15.8 ms (Switch 2), step-up share 0.90 -> 0.93, kFsrExtraMs 1.0 -> 0.8
+      (measured), FSR discount now for bd_switch_fsr >= 1 (Switch 2 default 2) when a step reaches the
+      output height (it never applied at 2 before).
+  src/engine/menus/config_menu.cpp: Update() calls SwitchNoteMenuFrame while active.
+  src/core/settings_rows.cpp + res/embed/localization.toml: Display page, group "Render Resolution"
+    (__SWITCH2__): Handheld Maximum 576-1080, Handheld Minimum 288-1080, Docked Maximum 720-1440, Docked
+    Minimum 288-1440 (WxH options). Saved in reblue.toml by the menu's SaveConfig (cvars). Desktop rows
+    (display mode, monitor, resolution, window size) hidden on Switch 2. Labels English only (other
+    languages fall back).
+  thirdparty/rexglue-sdk/include/rex/ui/switch2_exit.h, src/ui/switch2_exit.cpp: RexSwitch2SetRelaunch;
+    RunExit asks envSetNextLoad for that NRO, falls back to sdmc:/hbmenu.nro if refused. Same exit rules.
+  src/platform/reboot.cpp: Switch 2 PerformWarmReboot relaunches __system_argv[0] (new cvar
+    bd_switch2_relaunch, default true; false = old quit to hbmenu).
+VERIFIED
+  build-switch2.sh EXIT=0, 0 warnings (out/build_012b.log). reblue.nro 47,625,111 bytes, sha256
+  8ccf0c05213f1417632e... in out/switch2 and Desktop (equal). Not copied to the SD. Not run on hardware.
+  ELF: 249 ouncevk_vk* defined, 0 unprefixed vk* T/U; ouncevk 20261123-1 installed; no SetCurrentProcess;
+  appletLockExit/UnlockExit present; diagAbortWithResult = our strong override (direct SDK calls all in
+  Switch 1 #else branches); svcExitProcess only from RexSwitch2CloseForHomeMenu and libnx
+  _appletExitProcess; "sdmc:/hbmenu.nro" kept. Defaults: bd_fps_limit 60, bd_switch_fsr 2, dynres on.
+OPEN
+  - Hardware: open Settings in the field, move DOF and the new rows; expect "held ... Settings menu is
+    open", no [output-res] lines while it is open, "Settings applied" after closing, no death.
+  - Language change: expect "[exit] next load sdmc:/switch/reblue/reblue.nro (relaunch): set" and the
+    game back in the new language. Untested: whether kaiHEN's loader accepts a self next-load; if it
+    refuses, it falls back to hbmenu as before.
+  - 1080 handheld at 60 needs GPU time (or bd_switch2_max_clocks); "start of frame" 2.2 ms not explained.
+  - Fixed max-size targets with a sub-rectangle (no rebuilds at all) still the real dynres fix.

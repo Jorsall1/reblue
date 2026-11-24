@@ -1,0 +1,27 @@
+SESSION 004 (2026-11-23): kaiHEN exit audit (launch/close, crash, title Exit, HOME -> X)
+AUDITED (code read, not run on hardware)
+  Every exit reaches thirdparty/rexglue-sdk/src/ui/switch2_exit.cpp (LO switch_runtime.cpp port):
+    title screen Exit -> bd::RequestShutdown(GuestExit) -> core/shutdown.cpp RunSequence -> TerminateProcessNow
+      -> RexSwitch2Exit (shutdown watchdog: same path)
+    game XamLoaderTerminateTitle / LaunchTitle -> TerminateTitle -> rex_app.cpp -> RexSwitch2Exit(0)
+    exit() (xam_ui disc error, HalReturnToFirmware) -> switch_crash_hooks.c exit hook -> RexSwitch2Exit(1)
+    abort(), std::terminate, __assert_func, CPU/data abort (exception_handler_switch.cpp) -> RexSwitch2Exit(1)
+    ShowFatalError (crash_handler_switch.cpp) -> dialogs_switch.cpp skips the error applet under __SWITCH2__
+    Settings restart (reboot.cpp) -> TerminateProcessNow -> RexSwitch2Exit
+    HOME -> X: windowed_app_context_switch.cpp appletMainLoop false -> RexSwitch2CloseForHomeMenu; watchdog
+      thread does the same if the UI loop is stuck 3 s.
+  Other threads hand the exit to the main thread. appletLockExit is first in main. Every diagAbortWithResult /
+  __nx_applet_exit_mode = 1 / error applet is in the Switch 1 #else branch. sys-clk and SaltyNX are stubbed;
+  clkrst is only opened when bd_switch2_max_clocks = true (default false).
+CHANGED
+  thirdparty/rexglue-sdk/src/ui/switch_perf.cpp: under __SWITCH2__ the ts (temperature) service is no longer
+    opened (an sm lookup LO never makes on Switch 2; the profiler thread starts from a constructor). Temperatures
+    read 0 on Switch 2. Switch 1 unchanged.
+VERIFIED
+  Incremental build 12/12, EXIT=0. tsInitialize no longer in reblue.elf. [exit] strings present.
+  out/switch2/reblue.nro 47,604,631 bytes, sha256 8c25a440...3ad36d42. Copied to Desktop\reblue.nro and
+  sw2 sd\switch\reblue\reblue.nro (hashes checked).
+OPEN
+  - Hardware test: launch + title Exit, HOME -> X, then R-launch again; check logs/rex/rex_stderr.log [exit] lines.
+  - bd_switch2_max_clocks = true opens clkrst: whether the donor title may do so under kaiHEN is untested.
+  - A crash inside libnx itself (its own diagAbortWithResult, weak symbol) is not routed; same as LO.

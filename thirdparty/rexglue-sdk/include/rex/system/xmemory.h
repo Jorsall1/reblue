@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <rex/memory/utils.h>
+#include <rex/platform.h>  // REX_PLATFORM_SWITCH2
 #include <rex/ppc/func.h>  // PPCFunc type
 #include <rex/system/mmio_handler.h>
 #include <rex/thread/mutex.h>
@@ -402,8 +403,24 @@ class Memory {
   // Note that the contents at the specified host address are big-endian.
   template <typename T = uint8_t*>
   inline T TranslatePhysical(uint32_t guest_address) const {
+#if REX_PLATFORM_SWITCH2
+    // Backend::Heap (core/guest_memory_switch2.cpp): A, C and E are separate
+    // ranges, not aliases. A physical page lives in the view of the heap that
+    // allocated it (SetPhysicalHome); A when no heap has claimed it.
+    const uint32_t physical = guest_address & 0x1FFFFFFF;
+    return reinterpret_cast<T>(virtual_membase_ +
+                               kPhysicalHomeBase[physical_home_[physical >> 12]] + physical);
+#else
     return reinterpret_cast<T>(physical_membase_ + (guest_address & 0x1FFFFFFF));
+#endif
   }
+
+#if REX_PLATFORM_SWITCH2
+  // Which view (0 = A, 1 = C, 2 = E) holds the physical pages
+  // [physical_address, physical_address + size). Called by PhysicalHeap on
+  // every successful allocation.
+  void SetPhysicalHome(uint32_t physical_address, uint32_t size, uint32_t heap_base);
+#endif
 
   // Translates a host address to a guest virtual address.
   // Note that the contents at the returned host address are big-endian.
@@ -577,6 +594,15 @@ class Memory {
   uint32_t system_allocation_granularity_ = 0;
   uint8_t* virtual_membase_ = nullptr;
   uint8_t* physical_membase_ = nullptr;
+
+#if REX_PLATFORM_SWITCH2
+  // Guest view base per home: A + p, C + p, E + p - 0x1000 (the E heap maps
+  // physical address p at 0xE0000000 + p - 0x1000, PhysicalHeap::GetPhysicalAddress).
+  static constexpr uint64_t kPhysicalHomeBase[3] = {0xA0000000ull, 0xC0000000ull,
+                                                    0xE0000000ull - 0x1000ull};
+  // One byte per 4 KiB physical page (512 MiB / 4 KiB).
+  uint8_t physical_home_[0x20000] = {};
+#endif
 
   struct FunctionTableEntry {
     uint32_t table_base;

@@ -1,6 +1,12 @@
 /* See guest_memory_switch.h for the design and the reason behind each decision. */
 
-#if defined(__SWITCH__)
+/*
+ * Switch 1 only. Under kaiHEN (Switch 2) svcMapProcessCodeMemory,
+ * svcSetProcessMemoryPermission and svcMapProcessMemory are outside the donor
+ * title's syscall mask: the kernel ends the process on the first call. The
+ * Switch 2 build uses guest_memory_switch2.cpp (Backend::Heap) instead.
+ */
+#if defined(__SWITCH__) && !defined(__SWITCH2__)
 
 #include "guest_memory_switch.h"
 
@@ -793,4 +799,4 @@ void* RexGmShadowFor(uint64_t window_address) {
 
 }  // extern "C"
 
-#endif /* __SWITCH__ */
+#endif /* __SWITCH__ && !__SWITCH2__ */

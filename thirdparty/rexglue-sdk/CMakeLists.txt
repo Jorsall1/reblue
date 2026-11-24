@@ -25,6 +25,12 @@ option(REXGLUE_ENABLE_TRACY                "Enable Tracy profiler integration" O
 option(REXGLUE_ENABLE_PERF_COUNTERS        "Enable lightweight perf counter registry and overlay" ON)
 option(REXGLUE_HOST_TOOLS_ONLY             "reblue: host build that only needs the rexglue code generator (headless SDL)" OFF)
 option(REXGLUE_PLATFORM_SWITCH             "Build for Nintendo Switch (devkitA64 + libnx; set by the toolchain file)" OFF)
+# reblue: Switch 2 under kaiHEN (libounce + OunceVK; cmake/toolchains/switch2-libounce.cmake sets it beside
+# REXGLUE_PLATFORM_SWITCH). Selects Backend::Heap guest memory, the kaiHEN exit and OunceVK instead of Mesa NVK.
+option(REXGLUE_PLATFORM_SWITCH2            "Build for Nintendo Switch 2 (libounce + OunceVK, kaiHEN)" OFF)
+if(REXGLUE_PLATFORM_SWITCH2 AND NOT REXGLUE_PLATFORM_SWITCH)
+    message(FATAL_ERROR "REXGLUE_PLATFORM_SWITCH2 needs REXGLUE_PLATFORM_SWITCH (switch2-libounce.cmake sets both)")
+endif()
 # nfsmw: the Switch build for the title's own deko3d renderer (docs/HowToDeko3d.md): no Vulkan, no NVK and no
 # GPU plugin in the SDK; the title brings its graphics system, presenter and UI drawer.
 option(REXGLUE_SWITCH_DEKO3D               "Switch: build for a title-provided deko3d renderer, without Vulkan or NVK" OFF)

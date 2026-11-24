@@ -48,6 +48,7 @@
 #if REX_PLATFORM_SWITCH
 #include <cstdio>
 #include <rex/ui/switch_imgui_input.h>
+#include <rex/ui/switch2_exit.h>
 // Only the syscall header: switch.h drags typedefs that collide with rex.
 extern "C" {
 #include <switch/types.h>
@@ -596,9 +597,15 @@ void ReXApp::OnClosing(ui::UIEvent& e) {
   // the system for it (svcExitProcess is reported as "closed because an error
   // occurred"): with __nx_applet_exit_mode = 1, libnx closes the services and
   // sends ISelfController::Exit. See windowed_app_main_switch.cpp.
+#if defined(__SWITCH2__)
+  // kaiHEN: ISelfController::Exit would end the donor game; leave through
+  // the loader to hbmenu instead (switch2_exit.cpp).
+  RexSwitch2Exit(0);
+#else
   std::fflush(nullptr);
   __nx_applet_exit_mode = 1;
   __libnx_exit(0);
+#endif
 #else
   std::_Exit(0);
 #endif

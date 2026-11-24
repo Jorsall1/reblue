@@ -18,6 +18,7 @@
 #include "engine/sfx.h"
 #include "installer/installer.h"
 #include "platform/platform.h"
+#include "platform/switch_tuning.h"
 #include "vfs/vfs.h"
 
 #include <algorithm>
@@ -25,8 +26,10 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <system_error>
 #include <thread>
@@ -82,6 +85,68 @@ u64 LanguageBytesOnDisk(const std::filesystem::path &game,
   }
   return total;
 }
+
+#if defined(__SWITCH2__)
+// Log 009 (13:02:48, 13:02:50): an 819 and an 800 ms frame in the Settings
+// menu with no reads, texture or pipeline. LanguageBytesOnDisk stats every
+// file of snd_memory_<code> and snd_stream_<code> (~1,250 a language) on the
+// SD card, and LanguageSize ran it on the game thread as the cursor reached
+// each language, the cache cleared at every menu open. Now one low-priority
+// worker sizes every language once per process (again only after a language
+// is added or removed) and the detail panel shows "..." until it has.
+std::mutex s_lang_bytes_mutex;
+std::atomic<u32> s_lang_bytes_gen{0};
+std::atomic<bool> s_lang_bytes_busy{false};
+bool s_lang_bytes_stale = true;
+
+// Log 011 (13:50:51): std::terminate on a menu open. std::thread::detach()
+// threw system_error here (libnx's pthread_detach fails once the thread has
+// already ended: with every size cached the worker returns at once), and the
+// unwind destroyed the still-joinable temporary. The worker is now kept and
+// joined (it has ended or is ending when busy is false), never detached, and
+// not started at all when every language already has its size.
+std::thread s_lang_bytes_thread;
+
+void StartLanguageSizing(std::filesystem::path game,
+                         std::vector<std::string> codes) {
+  {
+    std::lock_guard lock(s_lang_bytes_mutex);
+    std::erase_if(codes, [](const std::string &code) {
+      return s_language_bytes.count(code) != 0;
+    });
+  }
+  if (codes.empty())
+    return;
+  if (s_lang_bytes_busy.exchange(true))
+    return;
+  if (s_lang_bytes_thread.joinable())
+    s_lang_bytes_thread.join(); // the previous worker, already finished
+  try {
+    s_lang_bytes_thread = std::thread([game = std::move(game),
+                                       codes = std::move(codes)] {
+      bd::platform::SpreadCurrentThread(5);
+      bd::platform::SetCurrentThreadPriority(0x3B);
+      for (const std::string &code : codes) {
+        {
+          std::lock_guard lock(s_lang_bytes_mutex);
+          if (s_language_bytes.count(code))
+            continue;
+        }
+        const u64 bytes = LanguageBytesOnDisk(game, code);
+        {
+          std::lock_guard lock(s_lang_bytes_mutex);
+          s_language_bytes[code] = bytes;
+        }
+        s_lang_bytes_gen.fetch_add(1, std::memory_order_release);
+      }
+      s_lang_bytes_busy.store(false);
+    });
+  } catch (const std::system_error &e) {
+    BD_WARN("[config] language sizes: no worker thread ({})", e.what());
+    s_lang_bytes_busy.store(false);
+  }
+}
+#endif
 
 #ifdef REBLUE_BUILD_INSTALLER
 std::array<std::filesystem::path, installer::kDiscCount> s_lang_sources;
@@ -449,7 +514,26 @@ void RefreshLanguages() {
       s_language_codes.push_back(code);
   }
 
+#if defined(__SWITCH2__)
+  {
+    std::lock_guard lock(s_lang_bytes_mutex);
+    if (s_lang_bytes_stale && !s_lang_bytes_busy.load()) {
+      s_language_bytes.clear();
+      s_lang_bytes_stale = false;
+    }
+  }
+  StartLanguageSizing(game, s_language_codes);
+#else
   s_language_bytes.clear();
+#endif
+}
+
+u32 LanguageSizesGeneration() {
+#if defined(__SWITCH2__)
+  return s_lang_bytes_gen.load(std::memory_order_acquire);
+#else
+  return 0;
+#endif
 }
 
 size_t LanguageCount() { return s_language_codes.size(); }
@@ -483,6 +567,15 @@ std::string LanguageSize(int index) {
   if (index < 0 || index >= static_cast<int>(s_language_codes.size()))
     return {};
   const std::string &code = s_language_codes[static_cast<size_t>(index)];
+#if defined(__SWITCH2__)
+  {
+    std::lock_guard lock(s_lang_bytes_mutex);
+    const auto found = s_language_bytes.find(code);
+    if (found != s_language_bytes.end())
+      return i18n::Bytes(found->second);
+  }
+  return "...";
+#endif
   auto it = s_language_bytes.find(code);
   if (it == s_language_bytes.end()) {
     const auto game = vfs::VFS::Get().Paths().Game();
@@ -722,6 +815,12 @@ LanguageJobOutcome PollLanguageJob(std::string &error) {
   if (s_lang_thread.joinable())
     s_lang_thread.join();
   ClearLanguageSources();
+#if defined(__SWITCH2__)
+  {
+    std::lock_guard lock(s_lang_bytes_mutex);
+    s_lang_bytes_stale = true; // what is on disk changed
+  }
+#endif
 
   if (s_lang_progress.canceled.load())
     return LanguageJobOutcome::Canceled;

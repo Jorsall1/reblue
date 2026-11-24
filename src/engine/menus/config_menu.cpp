@@ -23,6 +23,7 @@
 #include "engine/menus/config_menu_data.h"
 #include "engine/task.h"
 #include "platform/platform.h"
+#include "platform/switch_tuning.h"
 
 #include <algorithm>
 
@@ -795,6 +796,10 @@ bool ConfigMenu::Prime() {
 // Called from the TitleTask_Update hook.
 void ConfigMenu::Update(PPCContext &ctx, u8 *base) {
   Prime();
+  // Switch 2: dynamic resolution holds still while this menu is open (and the
+  // Settings resolution limits apply once it closes). No-op elsewhere.
+  if (active_)
+    bd::platform::SwitchNoteMenuFrame();
 
   // The footer caps live in the layout's own vars (see kFooterGlyphs), so a
   // rebind made on the keybind page reaches this very screen's footer.
@@ -866,6 +871,13 @@ void ConfigMenu::Update(PPCContext &ctx, u8 *base) {
       UpdateLanguageDetail(c);
       UpdateFooter();
     });
+#if defined(__SWITCH2__)
+    // The worker has sized another language: the panel may still say "...".
+    if (static u32 seen = 0; LanguageSizesGeneration() != seen) {
+      seen = LanguageSizesGeneration();
+      UpdateLanguageDetail(langlist_menu_.CursorIndex());
+    }
+#endif
     break;
   case State::LANGJOB:
     ShowLanguageNotice(LanguageJobStatus());

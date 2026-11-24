@@ -22,6 +22,7 @@
 #include "audio/audio.h"
 #include "engine/engine.h"
 #include "gpu/gpu.h"
+#include "platform/switch_tuning.h"
 #include "ui/ui.h"
 
 namespace bd {
@@ -42,6 +43,16 @@ bool RubyHidden() { return i18n::CurrentLocale() != engine::kLocaleJP; }
 // voice track on its load screen alone. reblue shows the row whenever
 // bd_boot.ini's [Voice] list gives it something to choose between.
 bool VoiceLanguageHidden() { return engine::Language().VoiceCount() < 2; }
+
+#if defined(__SWITCH2__)
+// Desktop window rows (display mode, monitor, resolution, window size) do
+// nothing on the console: the Switch 2 render size comes from the four
+// bd_switch2_* height rows below instead.
+bool HiddenOnSwitch2() { return true; }
+constexpr bool (*kDesktopOnly)() = HiddenOnSwitch2;
+#else
+constexpr bool (*kDesktopOnly)() = nullptr;
+#endif
 
 double DisplayModeNum() {
   if (rex::cvar::GetFlagByName("fullscreen") != "true")
@@ -94,6 +105,32 @@ constexpr SettingOption kResolution[] = {
     {.text = "1920x1080", .num = 1920, .value = "1920x1080"},
     {.text = "2560x1440", .num = 2560, .value = "2560x1440"},
     {.text = "3840x2160", .num = 3840, .value = "3840x2160"}};
+#if defined(__SWITCH2__)
+// Switch 2 render heights, whole 72-line steps (platform/switch_tuning.cpp
+// kSwitch2HeightStep), 16:9.
+constexpr SettingOption kSwitch2Heights[] = {
+    {.text = "512x288", .num = 288},    {.text = "640x360", .num = 360},
+    {.text = "768x432", .num = 432},    {.text = "896x504", .num = 504},
+    {.text = "1024x576", .num = 576},   {.text = "1152x648", .num = 648},
+    {.text = "1280x720", .num = 720},   {.text = "1408x792", .num = 792},
+    {.text = "1536x864", .num = 864},   {.text = "1664x936", .num = 936},
+    {.text = "1792x1008", .num = 1008}, {.text = "1920x1080", .num = 1080},
+    {.text = "2048x1152", .num = 1152}, {.text = "2176x1224", .num = 1224},
+    {.text = "2304x1296", .num = 1296}, {.text = "2432x1368", .num = 1368},
+    {.text = "2560x1440", .num = 1440}};
+constexpr int kSwitch2HeightIndex(int h) { return (h - 288) / 72; }
+
+template <platform::Switch2HeightLimit W>
+constexpr SettingBinding Switch2HeightBinding() {
+  return {.get = [] {
+            return static_cast<double>(platform::Switch2ResolutionHeight(W));
+          },
+          // Applied by dynamic resolution's controller once the menu closes.
+          .set = [](double v) {
+            return platform::SetSwitch2ResolutionHeight(W, static_cast<int>(v));
+          }};
+}
+#endif
 constexpr SettingOption kWindowSize[] = {
     {.text = "Auto", .num = 0, .value = "0", .value2 = "0", .key = "opt.auto"},
     {.text = "1280x720", .num = 1280, .value = "1280", .value2 = "720"},
@@ -123,12 +160,24 @@ constexpr SettingOption kFOV[] = {
     {.text = "95", .num = 50},  {.text = "100", .num = 55},
     {.text = "105", .num = 60}, {.text = "110", .num = 65},
     {.text = "115", .num = 70}, {.text = "120", .num = 75}};
+#if defined(__SWITCH2__)
+// Switch 2: 30 to 120 in steps, no Unlimited (bd_fps_limit is clamped to
+// 30-120 there). Above 60 the swapchain runs MAILBOX (gpu/present.cpp).
+constexpr SettingOption kFPS[] = {
+    {.text = "30", .num = 30},   {.text = "40", .num = 40},
+    {.text = "45", .num = 45},   {.text = "50", .num = 50},
+    {.text = "60", .num = 60},   {.text = "70", .num = 70},
+    {.text = "80", .num = 80},   {.text = "90", .num = 90},
+    {.text = "100", .num = 100}, {.text = "110", .num = 110},
+    {.text = "120", .num = 120}};
+#else
 constexpr SettingOption kFPS[] = {
     {.text = "30", .num = 30},
     {.text = "60", .num = 60},
     {.text = "90", .num = 90},
     {.text = "120", .num = 120},
     {.text = "Unlimited", .num = 0, .key = "opt.unlimited"}};
+#endif
 constexpr SettingOption kOnOff[] = {
     {.text = "Off", .num = 0, .value = "false", .key = "opt.off"},
     {.text = "On", .num = 1, .value = "true", .key = "opt.on"}};
@@ -497,25 +546,29 @@ constexpr SettingRow kDisplaySettings[] = {
                  .cvar = "fullscreen",
                  .cvar2 = "fullscreen_exclusive"},
      .options = kDisplayMode,
-     .count = OptCount(kDisplayMode)},
+     .count = OptCount(kDisplayMode),
+     .hidden = kDesktopOnly},
     {.label = "settings.display.monitor.label",
      .group = "menu.header.window",
      .binding = {.cvar = "monitor"},
      .sliderUi = true,
-     .special = SettingSpecial::Monitor},
+     .special = SettingSpecial::Monitor,
+     .hidden = kDesktopOnly},
     {.label = "settings.display.resolution.label",
      .group = "menu.header.window",
      .binding = {.get = RenderResolutionNum, .setText = SetRenderResolution},
      .options = kResolution,
      .count = OptCount(kResolution),
-     .sliderUi = true},
+     .sliderUi = true,
+     .hidden = kDesktopOnly},
     {.label = "settings.display.window_size.label",
      .group = "menu.header.window",
      .binding = {.cvar = "window_width", .cvar2 = "window_height"},
      .options = kWindowSize,
      .count = OptCount(kWindowSize),
      .sliderUi = true,
-     .windowedGated = true},
+     .windowedGated = true,
+     .hidden = kDesktopOnly},
     {.label = "settings.display.aspect_ratio.label",
      .group = "menu.header.window",
      .binding = {
@@ -594,6 +647,51 @@ constexpr SettingRow kDisplaySettings[] = {
              [](double v) { return gpu::Settings::Get().SetVsync(v != 0.0); }},
      .options = kOnOff,
      .count = OptCount(kOnOff)},
+#if defined(__SWITCH2__)
+    {.label = "settings.display.handheld_max_height.label",
+     .group = "menu.header.switch2_resolution",
+     .desc = "settings.display.handheld_max_height.desc",
+     .binding = Switch2HeightBinding<platform::Switch2HeightLimit::HandheldMax>(),
+     .options = kSwitch2Heights + kSwitch2HeightIndex(576),
+     .count = kSwitch2HeightIndex(1080) - kSwitch2HeightIndex(576) + 1,
+     .sliderUi = true},
+    {.label = "settings.display.handheld_min_height.label",
+     .group = "menu.header.switch2_resolution",
+     .desc = "settings.display.handheld_min_height.desc",
+     .binding = Switch2HeightBinding<platform::Switch2HeightLimit::HandheldMin>(),
+     .options = kSwitch2Heights,
+     .count = kSwitch2HeightIndex(1080) + 1,
+     .sliderUi = true},
+    {.label = "settings.display.docked_max_height.label",
+     .group = "menu.header.switch2_resolution",
+     .desc = "settings.display.docked_max_height.desc",
+     .binding = Switch2HeightBinding<platform::Switch2HeightLimit::DockedMax>(),
+     .options = kSwitch2Heights + kSwitch2HeightIndex(720),
+     .count = kSwitch2HeightIndex(1440) - kSwitch2HeightIndex(720) + 1,
+     .sliderUi = true},
+    {.label = "settings.display.docked_min_height.label",
+     .group = "menu.header.switch2_resolution",
+     .desc = "settings.display.docked_min_height.desc",
+     .binding = Switch2HeightBinding<platform::Switch2HeightLimit::DockedMin>(),
+     .options = kSwitch2Heights,
+     .count = kSwitch2HeightIndex(1440) + 1,
+     .sliderUi = true},
+    // Live: the present reads bd_switch_fsr every frame.
+    {.label = "settings.display.fsr.label",
+     .group = "menu.header.switch2_resolution",
+     .desc = "settings.display.fsr.desc",
+     .binding = {.get = [] { return platform::SwitchFsrEnabled() ? 1.0 : 0.0; },
+                 .set = [](double v) { return platform::SetSwitchFsrEnabled(v != 0.0); }},
+     .options = kOnOff,
+     .count = OptCount(kOnOff)},
+    {.label = "settings.display.show_fps.label",
+     .group = "menu.header.switch2_resolution",
+     .desc = "settings.display.show_fps.desc",
+     .binding = {.get = [] { return platform::Switch2ShowFps() ? 1.0 : 0.0; },
+                 .set = [](double v) { return platform::SetSwitch2ShowFps(v != 0.0); }},
+     .options = kOnOff,
+     .count = OptCount(kOnOff)},
+#endif
 };
 
 constexpr SettingRow kGraphicsSettings[] = {

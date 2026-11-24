@@ -214,6 +214,9 @@ time_t timegm(struct tm* tm) {
 #include <stdio.h>
 
 const char* RexSwitchLogDir(void);
+#if defined(__SWITCH2__)
+__attribute__((noreturn)) void RexSwitch2Exit(int code); /* rex/ui/switch2_exit.h */
+#endif
 
 void __assert_func(const char* file, int line, const char* func, const char* expr) {
     static _Atomic int dentro = 0;
@@ -228,5 +231,10 @@ void __assert_func(const char* file, int line, const char* func, const char* exp
             fclose(f);
         }
     }
+#if defined(__SWITCH2__)
+    /* kaiHEN: the error screen unloads kaiHEN. Back to hbmenu (switch2_exit.cpp). */
+    RexSwitch2Exit(1);
+#else
     diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_ShouldNotHappen));
+#endif
 }

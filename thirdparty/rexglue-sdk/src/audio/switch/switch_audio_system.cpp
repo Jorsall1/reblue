@@ -52,7 +52,15 @@ namespace {
 // 4 frames are 1024 samples (21.3 ms), the block size MarathonRecomp-NX found
 // to be safe on the shared cores; three buffers cap the latency at ~64 ms.
 constexpr uint32_t kFramesPerBuffer = 4;
+#if defined(__SWITCH2__)
+// re:Blue Switch 2 (session 013): four (85 ms in the device). The game side
+// never ran dry in log 009 (0 empty requests in 12 minutes), so a random
+// stutter is the device itself waiting for the next buffer: one more gives
+// the output thread 64 ms of slack instead of 43.
+constexpr uint32_t kBufferCount = 4;
+#else
 constexpr uint32_t kBufferCount = 3;
+#endif
 constexpr uint32_t kBufferSamples = kFramesPerBuffer * SwitchAudioDriver::kChannelSamples;
 constexpr uint32_t kBufferBytes = kBufferSamples * 2 * sizeof(s16);
 // audout wants page-aligned sample memory.
@@ -64,6 +72,14 @@ extern "C" void RexSwitchSampleCoreIdle(void);
 // Above guest threads (0x3B) so the device is never starved, like the audio
 // pump of MarathonRecomp-NX (0x2B).
 constexpr int kOutputThreadPriority = 0x2B;
+#if defined(__SWITCH2__)
+// Switch 2: raised from inside the thread above the XMA Decoder and the Audio
+// Worker (both 0x2B, any core): Horizon does not preempt between equal
+// priorities, so a busy one on the output thread's core held its buffer back.
+// It also floats over the process's cores (there is no system core on
+// Switch 2) instead of staying on core 0 with the UI thread.
+constexpr int kOutputThreadPrioritySwitch2 = 0x28;
+#endif
 constexpr size_t kOutputThreadStack = 0x10000;
 // Bounded so the thread notices shutdown even if the device stops releasing.
 constexpr u64 kWaitTimeoutNs = 100'000'000;
@@ -344,6 +360,22 @@ void SwitchAudioSystem::FillAndAppend(size_t buffer_index) {
   RexSwitchPerfMax(23, static_cast<u64>(std::min(pico, 100.0f) * 10000.0f));
   output.buffers[buffer_index].data_size = kBufferBytes;
   output.buffers[buffer_index].data_offset = 0;
+#if defined(__SWITCH2__)
+  // Device underrun estimate (rex_perfil.log "huecos"): every appended buffer
+  // plays for kBufferSamples at 48 kHz after the ones before it; appended
+  // after the queued audio should have ended, the device played silence for
+  // the difference.
+  {
+    static u64 queued_end = 0;
+    static const u64 buffer_ticks = armNsToTicks(1'000'000'000ull * kBufferSamples / 48000);
+    const u64 now = armGetSystemTick();
+    if (queued_end != 0 && now > queued_end + armNsToTicks(1'000'000)) {
+      RexSwitchPerfAdd(33, 1);
+      RexSwitchPerfAdd(34, armTicksToNs(now - queued_end) / 1000);
+    }
+    queued_end = std::max(queued_end, now) + buffer_ticks;
+  }
+#endif
   Result rc = audoutAppendAudioOutBuffer(&output.buffers[buffer_index]);
   RexSwitchPerfAdd(24, frames_mixed);
   RexSwitchPerfAdd(25, frames_missing);
@@ -375,6 +407,18 @@ void SwitchAudioSystem::OutputThreadMain() {
   // core/threading_switch.h), above the Audio Worker there (Horizon does not preempt between equal priorities). It also
   // samples that core's idle time for rex_perfil.log.
   const bool on_system_core = RexSwitchMoveCurrentThreadToSystemCore(kOutputThreadPriority - 1);
+#if defined(__SWITCH2__)
+  if (!on_system_core) {
+    u64 mask = 0;
+    if (R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && mask != 0)
+      (void)svcSetThreadCoreMask(CUR_THREAD_HANDLE, s32(svcGetCurrentProcessorNumber()),
+                                 u32(mask));
+    const bool raised = R_SUCCEEDED(svcSetThreadPriority(CUR_THREAD_HANDLE, kOutputThreadPrioritySwitch2));
+    REXLOG_INFO("SwitchAudioSystem: output thread priority 0x{:X}{}, cores 0x{:X}, {} device buffers ({} ms)",
+                raised ? kOutputThreadPrioritySwitch2 : kOutputThreadPriority, raised ? "" : " (0x28 refused)",
+                mask, kBufferCount, kBufferCount * kBufferSamples * 1000 / 48000);
+  }
+#endif
   for (size_t i = 0; i < kBufferCount; ++i) {
     FillAndAppend(i);
   }

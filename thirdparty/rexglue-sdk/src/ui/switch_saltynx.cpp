@@ -476,6 +476,12 @@ struct DevolverSm {
 }  // namespace
 
 void Iniciar() {
+#if defined(__SWITCH2__)
+  // No SaltyNX on Switch 2. Under kaiHEN, sm lookups go through libounce's
+  // overrides and a service that is not registered blocks the caller; no
+  // session is opened at all (kaiHEN invariant, rex/ui/switch2_exit.h).
+  return;
+#endif
   if (!g_habilitado.load(std::memory_order_relaxed)) {
     return;
   }

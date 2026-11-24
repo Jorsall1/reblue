@@ -159,11 +159,11 @@ bool CopySurfaceToTextureLocked(VideoState &s, GuestTexture *src,
         plume::RenderFramebufferDesc desc;
         desc.depthAttachment = dst->texture;
         desc.colorAttachmentsCount = 0;
-        fb = s.device->createFramebuffer(desc);
+        fb = CreateHostFramebuffer(s.device.get(), desc);
       } else {
         const plume::RenderTexture *attachments[1] = {dst->texture};
         plume::RenderFramebufferDesc desc(attachments, 1);
-        fb = s.device->createFramebuffer(desc);
+        fb = CreateHostFramebuffer(s.device.get(), desc);
       }
       if (!fb) {
         static std::atomic<u32> s_warn{0};

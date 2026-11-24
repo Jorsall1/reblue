@@ -200,6 +200,11 @@ bool HayServicio(const char* nombre) {
 }
 
 bool Abrir() {
+#if defined(__SWITCH2__)
+  // No sys-clk on Switch 2: smGetService on an unregistered name blocks, and
+  // under kaiHEN sm lookups are libounce overrides. Never opened.
+  return false;
+#endif
   if (g_abierto) {
     return true;
   }

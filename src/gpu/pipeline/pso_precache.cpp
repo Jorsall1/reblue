@@ -20,6 +20,7 @@
 #include "gpu/device.h"
 #include "gpu/pipeline/pipeline_cache.h"
 #include "gpu/settings.h"
+#include "platform/switch_tuning.h"
 
 namespace bd::gpu {
 
@@ -102,7 +103,14 @@ void WorkerLoop() {
 
 void StartWorkerPool() {
   std::call_once(g_startOnce, [] {
+#if defined(__SWITCH2__)
+    // libnx reports no processor count (hardware_concurrency() is 0), which
+    // left the pool at 2. The cores the process may use instead: 0x3F under
+    // kaiHEN, so 6 -> 3 compiler threads, 3 cores left for the game.
+    const unsigned hw = bd::platform::SwitchProcessCoreCount();
+#else
     const unsigned hw = std::thread::hardware_concurrency();
+#endif
     unsigned count = hw > 3 ? (hw * 2u) / 3u : 2u;
     if (hw > 5u && count > hw - 3u)
       count = hw - 3u; // leave 3 for the game
@@ -110,8 +118,18 @@ void StartWorkerPool() {
       count = 2u;
     // Never joinable: a static vector of these std::terminates if the message
     // loop unwinds to main instead of exiting via TerminateProcessNow.
-    for (unsigned i = 0; i < count; ++i)
+    for (unsigned i = 0; i < count; ++i) {
+#if defined(__SWITCH2__)
+      // Every core of the process, starting on cores 3-5 (the guest's
+      // hardware threads 0-2 start on 0-2, xthread.cpp).
+      bd::DetachThread(std::thread([i] {
+        bd::platform::SpreadCurrentThread(static_cast<int>(3u + i));
+        WorkerLoop();
+      }));
+#else
       bd::DetachThread(std::thread(WorkerLoop));
+#endif
+    }
     BD_DEBUG("pso_precache: started {} compiler thread(s)", count);
   });
 }

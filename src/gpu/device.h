@@ -72,6 +72,18 @@ public:
   // Pre-Runtime present (installer): clear back buffer + overlay hook only.
   static void PresentOverlayFrame();
 
+  // Pre-Runtime boot loading bar: black frame with a bar along the bottom
+  // filled to 'fraction' (0..1). Clears only, no pipeline or overlay hook, so
+  // any thread may call it while the UI thread is busy loading.
+  static void PresentBootProgress(float fraction);
+
+#if defined(__SWITCH2__)
+  // For the top-left HUD (bd_switch2_show_fps): presents per second (0.5 s
+  // windows), the size of the image the last present scaled to the screen
+  // (the live render size) and whether FSR 1 did it. Any thread.
+  static void Switch2HudStats(float &fps, u32 &w, u32 &h, bool &fsr);
+#endif
+
   // Called from the UI thread on window pixel size events. The rebuild itself
   // stays on the render thread at the frame boundary.
   static void RequestResize();
@@ -273,9 +285,14 @@ struct CreationCounter {
   std::atomic<u64> us{0};
 };
 struct CreationCounters {
-  CreationCounter textures, pipelines;
+  CreationCounter textures, pipelines, framebuffers;
 };
 extern CreationCounters g_creations;
+// The framebuffer creations (draw_framebuffer.cpp, resolve.cpp): counted like
+// the textures, for the [dynres] step cost line.
+std::unique_ptr<plume::RenderFramebuffer>
+CreateHostFramebuffer(plume::RenderDevice *device,
+                      const plume::RenderFramebufferDesc &desc);
 
 std::unique_ptr<plume::RenderTexture>
 CreateHostTexture(plume::RenderDevice *device,
@@ -316,6 +333,20 @@ u32 CurrentRenderPassId();
 // Frames in flight. Two lets the CPU record N+1 while the GPU runs N, which
 // hides the swap hook stall. One would block on the GPU between every frame.
 constexpr u32 kNumFrames = 2;
+
+// Swap chain image format, and the render target format of every pass that
+// draws into a swap chain image (present/gamma, FSR EASU, ImGui overlay).
+// Switch 2: OunceVK's VK_NN_vi_surface offers no B8G8R8A8 surface format
+// (vkCreateSwapchainKHR otherwise fails, "No compatible surface formats"), so
+// it uses R8G8B8A8 like LO's kSwapChainFormat. Offscreen guest targets keep
+// B8G8R8A8; only the attachment's byte order changes.
+#if defined(__SWITCH2__)
+constexpr plume::RenderFormat kSwapChainFormat =
+    plume::RenderFormat::R8G8B8A8_UNORM;
+#else
+constexpr plume::RenderFormat kSwapChainFormat =
+    plume::RenderFormat::B8G8R8A8_UNORM;
+#endif
 
 struct VideoState {
   // 'interface' is a Windows.h macro (#define interface struct).
@@ -520,6 +551,13 @@ struct VideoState {
   // block-shared buffers use their own graveyard.
   std::vector<std::unique_ptr<plume::RenderBuffer>>
       buffer_graveyard[kNumFrames];
+
+#if defined(__SWITCH2__)
+  // Framebuffers of a back buffer replaced at a dynamic resolution change,
+  // freed with the slot instead of after a full GPU drain.
+  std::vector<std::unique_ptr<plume::RenderFramebuffer>>
+      framebuffer_graveyard[kNumFrames];
+#endif
 
   std::vector<std::unique_ptr<plume::RenderTexture>> texture_free_backlog;
 

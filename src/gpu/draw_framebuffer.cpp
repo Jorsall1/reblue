@@ -10,6 +10,7 @@
  */
 #include "gpu/frame.h"
 
+#include <atomic>
 #include <mutex>
 #include <utility>
 
@@ -44,7 +45,7 @@ plume::RenderFramebuffer *GetFramebuffer(VideoState &s, GuestTexture *rt,
   }
   if (ds)
     desc.depthAttachment = ds->texture;
-  auto fb = s.device->createFramebuffer(desc);
+  auto fb = CreateHostFramebuffer(s.device.get(), desc);
   if (!fb) {
     BD_ERROR("createFramebuffer failed for (rt={} ds={})",
              static_cast<void *>(rt), static_cast<void *>(ds));
@@ -68,6 +69,22 @@ void ResolveEffectiveTargets(VideoState &s, GuestTexture *&rt,
     rt = nullptr;
   if (ds && !ds->texture)
     ds = nullptr;
+#if defined(__SWITCH2__)
+  // A depth surface smaller than the colour target it is paired with: the
+  // framebuffer takes the colour target's size, so the GPU would write depth
+  // past the end of the smaller image (invalid in Vulkan; on OunceVK a GPU
+  // fault that ends the process with no report). Seen after a dynamic
+  // resolution change, with render targets of the old size under surfaces of
+  // the new one. Drawn without depth instead; the pipeline follows this pair.
+  if (rt && ds && (ds->width < rt->width || ds->height < rt->height)) {
+    static std::atomic<u32> s_warn{0};
+    if (s_warn.fetch_add(1, std::memory_order_relaxed) < 16)
+      BD_WARN("[framebuffer] depth {}x{} smaller than colour {}x{}: drawn "
+              "without depth",
+              ds->width, ds->height, rt->width, rt->height);
+    ds = nullptr;
+  }
+#endif
   if (!rt && !ds && s.back_buffer_surface && s.back_buffer_surface->texture) {
     rt = s.back_buffer_surface;
   }

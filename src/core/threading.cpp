@@ -27,6 +27,10 @@ extern "C" {
 // libnx runtime internals (the same exit the SDK's rex_app.cpp takes).
 extern unsigned int __nx_applet_exit_mode;
 [[noreturn]] void __libnx_exit(int rc);
+#if defined(__SWITCH2__)
+// The SDK's kaiHEN exit (rex/ui/switch2_exit.h, src/ui/switch2_exit.cpp).
+[[noreturn]] void RexSwitch2Exit(int code);
+#endif
 }
 #else
 #include <sys/resource.h>
@@ -101,10 +105,16 @@ void TerminateProcessNow(int exit_code) {
   // std::_Exit returns the NRO to hbloader with the guest, GPU and audio
   // threads still alive, and the Homebrew Menu then crashes. An application
   // ends through the applet exit (see the SDK's rex_app.cpp, OnClosing).
+#if defined(__SWITCH2__)
+  // kaiHEN (Switch 2): the applet exit would end the donor game. Back to
+  // hbmenu through the loader; any thread may call this (switch2_exit.cpp).
+  RexSwitch2Exit(exit_code);
+#else
   (void)exit_code;
   std::fflush(nullptr);
   __nx_applet_exit_mode = 1;
   __libnx_exit(0);
+#endif
 #else
   std::_Exit(exit_code);
 #endif

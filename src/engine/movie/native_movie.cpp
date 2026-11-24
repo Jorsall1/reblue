@@ -574,6 +574,7 @@ REX_HOOK_RAW(sub_8271AED8) {
 REX_HOOK_RAW(sub_826FEDB8) {
   const u32 buffer = ctx.r3.u32, w = ctx.r4.u32, h = ctx.r5.u32,
             out = ctx.r6.u32;
+  bd::platform::SwitchNoteMovieFrame();
   __imp__sub_826FEDB8(ctx, base);
   if (buffer && out)
     Present(buffer, w, h, out);
