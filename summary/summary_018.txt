@@ -1,0 +1,38 @@
+SESSION 018 (2026-11-25): 1 h hardware log review (reblue_018.log) + post-battle shadow fix
+LOG: Desktop\bluedragon\new log\logs\reblue_018.log, build 20261124_1617 (same as session 017), 07:47-08:44,
+  handheld 1920x1080. rex_session "ended, code 0", stderr ends "[exit] HOME -> X". rex_crash/rex_cuelgue are
+  stale (no timestamp, same as session 017).
+
+BUG: player's shadow missing for ~2 s after every battle (user report)
+  Cause (from the recompiled guest code, not from the log): after a battle the invulnerability timer
+  (PlyTask +116, -1 per tick, sub_823AF9A0) sets blinkArm (PlyTask +0x28C0) = 1 on odd ticks, and
+  PlyTask__Draw skips the player's draw on an armed tick: on the X360 the player AND its shadow blink.
+  Our interpolation hook (frame_interp.cpp, commit e414576 "soften the player light blink") held the
+  chara alpha at 0.5 for the whole blink window; a translucent player casts no sun shadow -> no shadow
+  until the timer ran out.
+  Fix: src/engine/frame_interp.cpp PlyTask__Draw hook: the 0.5 hold applies only on the frames of the
+  tick the game armed (window tick == TickCount()); FlushPlyBlinkWindow already restores it at the next
+  tick. New cvar bd_ply_blink_steady (default false; true = old behaviour). docs/INSTALL-SWITCH.md row.
+  Shared code (all platforms), only acts with interpolation on.
+  Not verified on hardware. "Translucent = no shadow" is inferred from the user's symptom matching the
+  blink window exactly; if the shadow is still missing after battle, that inference is wrong.
+  Expected look now: player pulses opaque / half transparent for ~2 s, shadow present on the opaque
+  ticks (flickers with it, like the console).
+
+LOG REVIEW (no other bugs found)
+  Frame rate: 341 ten-second windows: 246 at >= 58 fps, 39 at 45-58, 11 at 35-45, 45 below 35
+  (movies / 30 fps cap, 7 "interpolation off" episodes). Frames over 100 ms: 31, nearly all ~104-109 ms
+  battle-start / battle-end frames (11 textures created, ipk read on the first visit) - same as 017.
+  Unexplained: 1213 ms (08:42:06) and 2262 ms (08:42:18) frames, GPU wait 0.1, no SD, no textures:
+  CPU-side stalls. Ask the user whether HOME / capture / a menu happened then.
+  2289 ms frame at exit = HOME -> X (GPU wait), known.
+  Texture churn unchanged: fmt 75 guest downsample chains 150-440 created/s after movies/in battles.
+  Hot guest fn sub_8267F4D8 still ~242 us a call, up to 12% of a core.
+
+BUILD: bash tools/switch2/build-switch2.sh OK. out/switch2/reblue.nro sha256 da632c20...,
+  saved to out/saved/20261125_shadow/ (nro, elf, SHA256SUMS, reblue_018.log). Not committed.
+
+OPEN
+  - Hardware check of the shadow fix (battle -> field: shadow should blink, not vanish).
+  - The two 1.2 s / 2.3 s CPU stalls at 08:42.
+  - Items from summary_017 (fmt 75 texture churn, sub_8267F4D8, battle-frame ~105 ms).

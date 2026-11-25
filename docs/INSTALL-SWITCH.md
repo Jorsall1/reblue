@@ -122,6 +122,7 @@ What the speed-related options do:
 | `bd_shadow_distance` | 1.0 | How far sun shadows reach. 2.0 removes most of the shadow pop-in and costs some speed in busy areas. |
 | `bd_shadow_update_interval` | 1 | The sun shadow map is redrawn every Nth frame and reused in between. 2 or more is faster, but shadows on and of moving characters can flicker or trail by up to N-1 frames. |
 | `bd_shadow_min_pixels` | 4.0 | Objects that look smaller than this on screen (distant grass, bushes, posts) cast no shadow. Lower it if mid-sized shadows go missing. |
+| `bd_ply_blink_steady` | false | After a battle the player blinks for a couple of seconds. Off: half transparent on the game's blink ticks only, so the shadow stays on the others (as on the console). On: half transparent the whole time, with no shadow until it ends. |
 | `bd_interp_min_fps` | 36 | Above 30 fps the game smooths motion between its 30 Hz updates. When the console can't keep this rate, smoothing turns off and the game holds 30 fps. |
 | `bd_reflection_update_interval` | 2 | Water reflections are redrawn every Nth frame and reused in between. 1 redraws them every frame. |
 | `bd_reflection_min_pixels` | 3.0 | Objects smaller than this in the reflection are left out of it. |

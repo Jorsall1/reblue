@@ -1761,6 +1761,20 @@ REX_HOOK_RAW(bdAnimRotationKeysSample) {
              f32(p.z) + f32(ShortestArc(p.z, k.z)) * w);
 }
 
+// After a battle the game's invulnerability timer (PlyTask +116, counted down
+// once a tick) arms the blink on its odd ticks, and PlyTask__Draw skips the
+// player's draw on an armed tick: on the console the player and its shadow are
+// both gone every other tick for a couple of seconds. Under interpolation only
+// the first frame of a tick sees the arm, so the skip became a one-frame
+// strobe; the player is drawn at kPlyBlinkAlpha instead. A translucent player
+// casts no sun shadow, so holding that alpha through the whole window (as the
+// first version did) took the shadow away until the timer ran out.
+REXCVAR_DEFINE_BOOL(bd_ply_blink_steady, false, "Graphics",
+                    "After a battle the player is drawn half transparent for "
+                    "the whole blink (no shadow until it ends). Off: half "
+                    "transparent on the game's blink ticks only, as the "
+                    "console blinks it, so the shadow stays on the others.");
+
 namespace {
 
 constexpr f32 kPlyBlinkAlpha = 0.5f;
@@ -3276,7 +3290,11 @@ REX_HOOK_RAW(PlyTask__Draw) {
     }
     if (arm <= 1) {
       auto it = g_plyBlinkWindow.find(ctx.r3.u32);
-      if (it != g_plyBlinkWindow.end() && !it->second.held) {
+      // Steady: every frame of the window. Otherwise only the frames of the
+      // tick the game armed (FlushPlyBlinkWindow restores at the next tick).
+      if (it != g_plyBlinkWindow.end() && !it->second.held &&
+          (REXCVAR_GET(bd_ply_blink_steady) ||
+           it->second.tick == bd::engine::TickCount())) {
         const f32 cur = chara.Alpha();
         if (cur > kPlyBlinkAlpha) {
           it->second.alpha = cur;
