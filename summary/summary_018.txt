@@ -36,3 +36,15 @@ OPEN
   - Hardware check of the shadow fix (battle -> field: shadow should blink, not vanish).
   - The two 1.2 s / 2.3 s CPU stalls at 08:42.
   - Items from summary_017 (fmt 75 texture churn, sub_8267F4D8, battle-frame ~105 ms).
+
+RELEASE v0.1.0 (same session)
+  Commit 719e286 (shadow fix) on switch2-ouncevk; branch + annotated tag v0.1.0 pushed to
+  github.com/Jorsall1/reblue (first push of the Switch 2 branch, includes 807df26).
+  Release https://github.com/Jorsall1/reblue/releases/tag/v0.1.0:
+    reblue-switch2-v0.1.0.zip (sha256 306488cb...): switch/reblue/{reblue.nro (da632c20..., the build the
+    user tested), cache/pack_index.bin (= Switch 1 v1.3.6 release, b5fc1bee...), profiles/default/reblue.toml
+    (sw2 sd profile minus 2x shadows/user_language/debug lines, config_version 3 = Low preset defaults),
+    game/PUT_GAME_FILES_HERE.txt}. reblue-switch2-v0.1.0.elf separate (sym for crash logs).
+  Verified: downloaded zip sha == local, nro inside == tested build, every toml key is a defined cvar.
+  Note: the nro's embedded version string says "commit 17d05e66e (local modifications)" (built before the
+  commit); it was not rebuilt so the shipped binary is exactly the tested one.
