@@ -1,5 +1,7 @@
 # re:Blue for Nintendo Switch: installation
 
+> **Switch 2:** this guide is for the Switch 1 version (Atmosphère, deko3d). For the Switch 2 (kaiHEN, OunceVK) see the [README](../README.md#getting-started).
+
 An **experimental** homebrew build of re:Blue (the Blue Dragon recompilation)
 for Switch consoles running custom firmware. The recompiled game runs natively
 on the console and draws through deko3d, the Switch's own graphics API. You

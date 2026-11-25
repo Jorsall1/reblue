@@ -2,94 +2,146 @@
 
 <img src="res/reblue.png" alt="re:Blue logo" width="112">
 
-# re:Blue for Nintendo Switch
+# re:Blue for Nintendo Switch 2
 
-**Blue Dragon (Xbox 360), recompiled to run natively on the Nintendo Switch.**
+**Blue Dragon (Xbox 360), recompiled to run natively on the Nintendo Switch 2.**
 
-[![Release](https://img.shields.io/github/v/release/Ad0ky/reblue?include_prereleases&label=release)](https://github.com/Ad0ky/reblue/releases)
-[![Downloads](https://img.shields.io/github/downloads/Ad0ky/reblue/total?label=downloads)](https://github.com/Ad0ky/reblue/releases)
+[![Release](https://img.shields.io/github/v/release/Jorsall1/reblue?include_prereleases&label=release)](https://github.com/Jorsall1/reblue/releases)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
-![Nintendo Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012)
-![deko3d](https://img.shields.io/badge/graphics-deko3d-5E5E5E)
+![Nintendo Switch 2](https://img.shields.io/badge/Nintendo%20Switch%202-homebrew-E60012)
+![Vulkan](https://img.shields.io/badge/graphics-Vulkan%20(OunceVK)-A41E22)
 
-### [Download](https://github.com/Ad0ky/reblue/releases) · [Installation guide](docs/INSTALL-SWITCH.md) · [Report a problem](https://github.com/Ad0ky/reblue/issues)
+### [Download](https://github.com/Jorsall1/reblue/releases) · [Report a problem](https://github.com/Jorsall1/reblue/issues)
 
-By **Ad0ky**, based on [zolaware's re:Blue](https://github.com/zolaware/reblue).
+Switch 2 port by **[Jorsall1](https://github.com/Jorsall1)** and **Claude** ([Anthropic](https://www.anthropic.com)), built on the [Switch port](https://github.com/Ad0ky/reblue) by **Ad0ky**, which is based on [zolaware's re:Blue](https://github.com/zolaware/reblue).
+
 Free and open source: if you paid for this, ask for a refund.
 
 </div>
 
 ## What this is
 
-A homebrew build of re:Blue for Switch consoles running custom firmware (Atmosphère). The game's Xbox 360 code is statically recompiled to native ARM64, and its graphics run on **deko3d**, the Switch's own graphics API. It plays at the Switch's stock clocks.
+A homebrew build of re:Blue for the Nintendo Switch 2, running under [kaiHEN](https://github.com/ouncebrew/kaihen). The game's Xbox 360 code is statically recompiled to native ARM64. Its graphics run on Vulkan through [OunceVK](https://github.com/ouncebrew/ouncevk), the Switch 2's Mesa NVK driver, and the port is built with [libounce](https://github.com/ouncebrew/libounce) from the [ounce devkit](https://github.com/ouncebrew/ounce-devkit).
 
 You need your own Blue Dragon discs. This project contains no game files.
 
-> **Experimental.** The game is playable, but expect rough edges: report crashes, missing effects or anything that looks or sounds different from the Xbox 360 ([how](#reporting-a-problem)).
+The game plays through the field, towns, dungeons, battles, movies and menus. Report crashes, missing effects or anything that looks or sounds different from the Xbox 360 ([how](#reporting-a-problem)).
+
+The original Switch (Switch 1) version, with its deko3d back end, lives in [Ad0ky/reblue](https://github.com/Ad0ky/reblue). Use that one on a Switch 1 with Atmosphère.
 
 ## Performance
 
-Measured at the Switch's **stock clocks** (CPU 1020 MHz, GPU 460 MHz) in handheld mode, with the scene rendered at 960×540:
+The Switch 2 version targets **60 FPS** (the Switch 1 version runs at 30). The game still updates at its own 30 Hz; every frame in between is fully rendered with the motion smoothed between two updates (no frame generation). If the console can't hold 36 FPS for a while, smoothing turns off and the game holds 30 FPS until there's room again.
 
-| Scene | Frame rate at stock clocks |
-| :--- | ---: |
-| Most of the field, towns and dungeons | **25–30 FPS**, the game's cap is 30 |
-| The castle town's main street, with its crowd | **19–23 FPS** (16–18 before 1.3.6) |
+Dynamic resolution keeps the frame rate: it lowers the 3D scene's height when the GPU runs out of time and raises it again when there's room. FSR 1 scales the scene to the screen.
 
-Entering a new area can hitch for a moment while its files load. The castle town's main street is limited by both the GPU (about 1.6 million vertices a frame) and the CPU (the animation of its many characters), now about equally. Work on both continues.
+Measured in handheld mode at the system's stock clocks, with the default settings, over a one-hour session:
 
-After an update, the first area load can freeze for a few seconds while the console compiles the new shaders once; they are kept in the shader cache.
+| Scene | Frame rate | Scene resolution |
+| :--- | ---: | ---: |
+| Field, towns and dungeons | **58–60 FPS** | 576 to about 940 rows |
+| Busy scenes, mostly right after a movie | 42–56 FPS | 576 rows (the minimum) |
+| Movies | 30 FPS (the movie's own rate) | — |
+
+Starting or leaving a battle hitches for about a tenth of a second. Docked, dynamic resolution runs from 720p up to 1440p; docked performance hasn't been benchmarked yet.
 
 ## Getting started
 
 You need:
 
-- a Switch with **Atmosphère** and the Homebrew Menu;
-- a **microSD card (exFAT)** with about **15 GB** free;
+- a **Nintendo Switch 2** running **[kaiHEN](https://github.com/ouncebrew/kaihen)** with the Homebrew Menu (`sdmc:/hbmenu.nro`);
+- a **microSD card** with about **15 GB** free (the game files take about 13 GB);
 - your **Blue Dragon discs** (all three, Global release: US/EU);
-- a **PC**, to prepare the game files once with the [PC version of re:Blue](https://github.com/zolaware/reblue/releases/latest).
+- a **Windows or Linux PC**, to prepare the game files once with the [PC version of re:Blue](https://github.com/zolaware/reblue/releases/latest);
+- the **[release ZIP](https://github.com/Jorsall1/reblue/releases/latest)**: the game, its settings file and its file index.
 
-Then:
+### 1. Prepare the game files on a PC
 
-1. **Prepare the game files:** install the PC version and let its installer read your three discs. It leaves a `game` folder.
-2. **Copy `reblue.nro`** to `sdmc:/switch/reblue/`, and the whole `game` folder into `sdmc:/switch/reblue/game/`.
-3. **Start the Homebrew Menu through title takeover:** hold **R** while starting any installed game, then choose **re:Blue**. Starting from the Album doesn't work, because the game needs the full application memory.
+The console can't read the discs itself. The PC version's installer does it once:
 
-The [installation guide](docs/INSTALL-SWITCH.md) has every step, the SD card layout and how to update.
+1. Download the [PC version of re:Blue](https://github.com/zolaware/reblue/releases/latest) and start it.
+2. Let its installer read your three discs.
+3. When it finishes, find its `game` folder. It holds `default.xex`, `bd_boot.ini`, `bd_config.ini`, the `pack`, `movie` and `map` folders and the sound files.
 
-### Four-core mode
+You don't need to play the PC version.
 
-Started from a **forwarder** that uses the 39-bit address space, the game can use all four CPU cores: the audio and shader compile threads move to the fourth core, away from the game. On the first start from a forwarder the game writes the forwarder's NPDM to `sdmc:/atmosphere/contents/<forwarder id>/exefs/main.npdm`; it takes effect from the next start. Through title takeover the game runs on three cores, as before.
+### 2. Copy the game to the SD card
+
+1. Extract the release ZIP to the **root** of the SD card. It creates `switch/reblue/` with `reblue.nro`, `cache/`, `profiles/` and an empty `game/` folder.
+2. Copy the **whole contents** of the PC's `game` folder into `sdmc:/switch/reblue/game/`.
+
+### SD card layout
+
+```
+sdmc:/
+├── hbmenu.nro                           the Homebrew Menu (your kaiHEN setup)
+└── switch/
+    └── reblue/
+        ├── reblue.nro                   the game (release ZIP)
+        ├── cache/
+        │   ├── pack_index.bin           file index (release ZIP; rebuilt if it doesn't match)
+        │   └── vulkan_pipelines.bin     GPU pipeline cache (created by the game)
+        ├── profiles/default/
+        │   ├── reblue.toml              settings (release ZIP)
+        │   └── saves/                   your saves (created by the game)
+        ├── game/                        your game files (PC installer)
+        │   ├── default.xex
+        │   ├── bd_boot.ini
+        │   ├── bd_config.ini
+        │   ├── pack/
+        │   ├── movie/
+        │   ├── map/
+        │   └── ...
+        └── logs/                        created by the game
+            ├── reblue_001.log           one game log per start
+            └── rex/                     rex_stderr.log, rex_crash.log, ...
+```
+
+### 3. Start the game
+
+Start the Homebrew Menu **through title takeover**: hold **R** while starting any installed game, then choose **re:Blue**.
+
+The first start takes longer: the game indexes its files, and the GPU driver builds its pipelines while you play, so expect some stutter in the first areas. Later starts load them from `cache/vulkan_pipelines.bin`.
+
+To quit, press **HOME** and close the game with **X**. kaiHEN's R hook keeps working afterwards.
+
+### Updating
+
+Replace `reblue.nro` with the new one. Keep `game/`, `cache/` and `profiles/` (your saves are in `profiles/default/saves/`; back that folder up before updating).
 
 ## Settings
 
-Most options are in the game's own **Settings** menu. The rest are in `sdmc:/switch/reblue/profiles/default/reblue.toml`, created on the first start. Each line is `name = value`; anything not listed keeps its default. The release's `reblue.toml` has the settings recommended for the Switch.
+Most options are in the game's own **Settings** menu. **Display → Render Resolution** also has **FSR Upscaling** and **Show FPS**. Graphics start on the **Low** preset (shadow map 1024, retail shadow distance), which leaves dynamic resolution room to work.
 
-| Option | Default | What it does |
+The rest are in `sdmc:/switch/reblue/profiles/default/reblue.toml`. Each line is `name = value`; lines starting with `#` are comments, and anything not listed keeps its default. The release's `reblue.toml` has the recommended settings:
+
+| Option | Release value | What it does |
 | :--- | :---: | :--- |
-| `bd_shadow_distance` | 1.0 | How far sun shadows reach. 2.0 removes most of the shadow pop-in and costs some speed in busy areas. |
+| `bd_fps_limit` | 60 | Frame-rate target. 30 plays at the game's own rate, without smoothing. |
+| `bd_interp_min_fps` | 36 | Below this rate smoothing turns off and the game holds 30 FPS. |
+| `bd_switch_dynamic_resolution` | true | Dynamic resolution. |
+| `bd_switch_fsr` | 2 | FSR 1 upscaling (0 = plain scaling). Also in the Settings menu. |
+| `bd_switch2_handheld_min_height` / `_max_height` | 576 / 1080 | Handheld scene resolution range for dynamic resolution. |
+| `bd_switch2_docked_min_height` / `_max_height` | 720 / 1440 | Docked scene resolution range. |
+| `bd_switch2_docked_output_height` | 1440 | Docked output to the TV: 1440 = 2560×1440, 1080 = 1920×1080. |
+| `bd_switch2_max_clocks` | false | false = the system's stock game clocks. true = above stock (an overclock). |
 | `bd_shadow_update_interval` | 1 | The sun shadow map is redrawn every Nth frame. 2 or more is faster, but shadows of moving characters can flicker. |
-| `bd_shadow_min_pixels` | 4.0 | Objects smaller than this on screen cast no shadow. Lower it if mid-sized shadows go missing. |
+| `bd_shadow_min_pixels` | 10 | Objects smaller than this on screen cast no shadow (0 = all). Lower it if mid-sized shadows go missing. |
+| `bd_ply_blink_steady` | false | After a battle the player blinks for a couple of seconds. false keeps its shadow on between blinks, as on the console; true holds the player half transparent, without a shadow, until the blink ends. |
 | `bd_reflection_update_interval` | 2 | Water reflections are redrawn every Nth frame. 1 redraws them every frame. |
-| `bd_reflection_min_pixels` | 3.0 | Objects smaller than this are left out of the reflection. |
-| `bd_interp_min_fps` | 36 | Above 30 FPS the game smooths motion between its 30 Hz updates. Below this rate smoothing turns off and the game holds 30 FPS. |
-| `bd_render_thread` | true | Draws are recorded on a thread of their own, on another core. |
-| `bd_scene_color_r11g11b10` | false | A lighter scene color format (recommended: true). Set false if glows or transparency look wrong. |
-| `bd_opt_audio_hints` | 1 | The game's Audio Hints: spoken and on-screen notices such as "Playable" or "Checkpoint". |
-| `bd_gpu_profile` | 1 | GPU timing in the log: 0 off, 1 render passes, 2 per shader (costs GPU time). |
-| `bd_deko3d_fold_vs_masks` | true | Vertex shaders get their vertex layout's flags built in (same picture, faster). Set false only to rule it out when reporting a graphics problem. |
-| `bd_deko3d_bone_row_zero` | true | Skinning skips a per-read range check (same picture, faster). Set false only to rule it out when reporting a graphics problem. |
+| `bd_reflection_min_pixels` | 10 | Objects smaller than this are left out of the reflection. |
+| `bd_scene_color_r11g11b10` | true | A lighter scene color format. Set false if glows or transparency look wrong. |
+| `bd_opt_audio_hints` | 0 | The game's Audio Hints: spoken and on-screen notices such as "Playable" or "Checkpoint". |
+| `bd_gpu_profile` | 1 | GPU timing; dynamic resolution reads it, keep 1. |
 
-Don't add `switch_system_core_mixer`: since 1.3.6 it is ignored, because moving a game sound thread to the system core could freeze the console.
-
-The [installation guide](docs/INSTALL-SWITCH.md#settings) explains the release's `reblue.toml`.
+**Recommended:** keep dynamic resolution and FSR on.
 
 ## Reporting a problem
 
-[Open an issue](https://github.com/Ad0ky/reblue/issues) with:
+[Open an issue](https://github.com/Jorsall1/reblue/issues) with:
 
 - the release version;
-- handheld or docked, and whether you start it through title takeover or a forwarder;
+- handheld or docked;
 - your `reblue.toml`;
 - what you were doing, and where in the game;
 - a photo or a short video if it is a graphics problem.
@@ -98,28 +150,36 @@ Also attach these files from the SD card, from the session where it happened:
 
 - the newest game log in `sdmc:/switch/reblue/logs/` (`reblue_001.log` or similar);
 - `sdmc:/switch/reblue/logs/rex/rex_stderr.log`;
-- `sdmc:/switch/reblue/logs/rex/rex_crash.log`, if there is one.
-
-For a performance report, create an empty file `sdmc:/switch/reblue/logs/rex/perfil_pilas.flag` before starting the game and also attach `logs/rex/rex_perfil.log`. The game runs a little slower while that file exists, so delete it afterwards.
+- `sdmc:/switch/reblue/logs/rex/rex_crash.log` and `rex_cuelgue.log`, if they exist.
 
 Don't attach the game's files (`game/`).
 
 ## For developers
 
-- [docs/SWITCH.md](docs/SWITCH.md): building the Switch version, how the port works, every optimization with its measurements, logs and diagnostics.
-- [docs/SWITCH-deko3d.md](docs/SWITCH-deko3d.md): the deko3d graphics back end.
-- **Building:** on Windows with Docker, `run-switch-build.bat -Pgo use -Lto -InPlace` builds the release NRO (profile-guided, link-time optimized, in-place localized copies). The build needs the files from your own copy of Blue Dragon.
+Building runs on Linux (or WSL) and needs devkitPro with the [ounce devkit](https://github.com/ouncebrew/ounce-devkit) (libounce, OunceVK) installed under `/opt/devkitpro`, and clang 19 for the host stage (downloaded without root if it isn't installed). The build reads `default.xex` and the game's shaders from your own game files: pass your `game` folder once as `GAME=/path/to/game` and they are extracted to `assets/` (not in the repository). Then:
 
-This repository also carries the rest of upstream's source, so the PC versions still build from it. For those, use [zolaware/reblue](https://github.com/zolaware/reblue).
+```sh
+bash tools/switch2/host-stage.sh       # patches, SDK deps, recompiled game code (generated/), shader cache
+bash tools/switch2/build-switch2.sh    # out/switch2/reblue.nro (and reblue.elf, for crash addresses)
+```
+
+Switch 2 code is under `__SWITCH2__` (C/C++), `REX_PLATFORM_SWITCH2` (SDK) and `REXGLUE_PLATFORM_SWITCH2` (CMake), so the Switch 1 build is unchanged. The plume changes are kept as patches in `tools/switch/patches/`.
+
+Switch 2 specifics worth knowing:
+
+- **Memory:** kaiHEN masks the memory-mapping syscalls, so guest memory is one heap block (`Backend::Heap`), not mirrored views (`thirdparty/rexglue-sdk/src/core/guest_memory_switch2.cpp`).
+- **kaiHEN's R hook:** never send `SetCurrentProcess` (or any identity request) on a session from `smGetService` on Switch 2. Those sessions are libounce overrides shared with kaiHEN, and doing so breaks the R → Homebrew Menu hook. The SD card stays on `fsOpenSdCardFileSystem`. Every exit, crash and abort goes back to `sdmc:/hbmenu.nro` through `RexSwitch2Exit()`.
+- **Clears:** NVK writes every rectangle of one `vkCmdClearAttachments` into a single 64 KiB command block. More than 2730 rectangles overrun it and stop the GPU, so every clear is issued in calls of at most 80 rectangles.
+
+[docs/SWITCH.md](docs/SWITCH.md) describes the Switch port (shared by both consoles) and its optimizations. This repository also carries the rest of upstream's source, so the PC versions still build from it. For those, use [zolaware/reblue](https://github.com/zolaware/reblue). For the Switch 1 version, use [Ad0ky/reblue](https://github.com/Ad0ky/reblue).
 
 ## Credits
 
-- **Switch port:** [Ad0ky](https://github.com/Ad0ky).
-- **re:Blue:** [crack](https://github.com/tomcl7) (project lead) and [rcold](https://github.com/RC0ld), with the playtesters, translators and contributors listed in [upstream's README](https://github.com/zolaware/reblue#credits).
-- **Research and tools:**
-  - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) and [UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp) by hedge-dev, [plume](https://github.com/renderbag/plume) and [Xenia](https://github.com/xenia-project/xenia);
-  - on the Switch: [devkitPro](https://devkitpro.org), [libnx](https://github.com/switchbrew/libnx), [deko3d](https://github.com/devkitPro/deko3d) and [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere);
-  - ChanseyIsTheBest's [renut-nx base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base), for the four-core mode and its optimization guide.
-- **Upscaling:** thanks to AMD for [FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT), used by the experimental dynamic resolution.
+- **Switch 2 port:** [Jorsall1](https://github.com/Jorsall1) and Claude ([Anthropic](https://www.anthropic.com)).
+- **Switch port**, which this port is built on: [Ad0ky](https://github.com/Ad0ky), in [Ad0ky/reblue](https://github.com/Ad0ky/reblue). The file index (`pack_index.bin`) in the release ZIP comes from its [v1.3.6 release](https://github.com/Ad0ky/reblue/releases/tag/v1.3.6).
+- **re:Blue**, the original recompilation: [crack](https://github.com/tomcl7) (project lead) and [rcold](https://github.com/RC0ld), with the playtesters, translators and contributors listed in [upstream's README](https://github.com/zolaware/reblue#credits).
+- **Switch 2 homebrew:** [ouncebrew](https://github.com/ouncebrew) for [kaiHEN](https://github.com/ouncebrew/kaihen), [libounce](https://github.com/ouncebrew/libounce), [OunceVK](https://github.com/ouncebrew/ouncevk) and the [ounce devkit](https://github.com/ouncebrew/ounce-devkit).
+- **Research and tools:** [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), [XenosRecomp](https://github.com/hedge-dev/XenosRecomp), [UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp), [plume](https://github.com/renderbag/plume), [Xenia](https://github.com/xenia-project/xenia), [devkitPro](https://devkitpro.org), [libnx](https://github.com/switchbrew/libnx) and [Mesa](https://mesa3d.org) (NVK).
+- **Upscaling:** thanks to AMD for [FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT).
 
 Blue Dragon and its assets belong to their respective owners. This is an unofficial, non-commercial project under the [BSD 3-Clause License](LICENSE); dependencies keep their own licenses. Use data from discs you own, and don't commit game executables, archives, textures, audio, video, generated game code or captures to this repository.
